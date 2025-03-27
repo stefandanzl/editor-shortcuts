@@ -1,4 +1,4 @@
-import { Plugin, Editor, MarkdownView, App } from "obsidian";
+import { Plugin, Editor } from "obsidian";
 
 export default class EditorShortcutsPlugin extends Plugin {
 	async onload() {
