@@ -1,7 +1,7 @@
 {
-	"name": "obsidian-sample-plugin",
-	"version": "1.1.0",
-	"description": "This is a sample plugin for Obsidian (https://obsidian.md)",
+	"name": "editor-shortcuts",
+	"version": "0.1.0",
+	"description": "Simple shortcuts for a better editing experience.",
 	"main": "main.js",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
