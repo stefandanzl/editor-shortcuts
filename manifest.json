@@ -1,7 +1,7 @@
 {
 	"id": "editor-shortcuts",
 	"name": "Editor Shortcuts",
-	"version": "0.1.0",
+	"version": "1.1.0",
 	"minAppVersion": "1.5.0",
 	"description": "Shortcuts for better editing experience.",
 	"author": "Stefan Danzl",
