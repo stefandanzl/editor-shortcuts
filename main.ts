@@ -4,31 +4,77 @@ export default class EditorShortcutsPlugin extends Plugin {
 	async onload() {
 		console.log("Loading Editor Shortcuts plugin");
 
+		// Helper function to get selected line range
+		const getSelectedLineRange = (editor: Editor) => {
+			const from = editor.getCursor("from");
+			const to = editor.getCursor("to");
+			return {
+				hasMultiLineSelection: from.line !== to.line,
+				startLine: Math.min(from.line, to.line),
+				endLine: Math.max(from.line, to.line),
+				from,
+				to
+			};
+		};
+
 		// Command to delete the current line
 		this.addCommand({
 			id: "delete-current-line",
 			name: "Delete current line",
 			editorCallback: (editor: Editor) => {
-				const cursor = editor.getCursor();
-				const line = cursor.line;
-				const lineText = editor.getLine(line);
+				const { hasMultiLineSelection, startLine, endLine } = getSelectedLineRange(editor);
 
-				// Delete the entire line
-				editor.replaceRange(
-					"",
-					{ line: line, ch: 0 },
-					{ line: line, ch: lineText.length },
-					"delete-line"
-				);
+				if (hasMultiLineSelection) {
+					// Delete multiple lines
+					const lastLine = editor.lineCount() - 1;
+					
+					if (endLine === lastLine) {
+						// If deleting lines at the end, also delete the newline before them
+						const startCh = startLine > 0 ? editor.getLine(startLine - 1).length : 0;
+						const startDeleteLine = startLine > 0 ? startLine - 1 : startLine;
+						const endLineText = editor.getLine(endLine);
+						
+						editor.replaceRange(
+							"",
+							{ line: startDeleteLine, ch: startCh },
+							{ line: endLine, ch: endLineText.length },
+							"delete-line"
+						);
+					} else {
+						// Delete from start of first line to start of line after last line
+						editor.replaceRange(
+							"",
+							{ line: startLine, ch: 0 },
+							{ line: endLine + 1, ch: 0 },
+							"delete-line"
+						);
+					}
+					
+					// Position cursor at the start of where deletion happened
+					editor.setCursor({ line: startLine, ch: 0 });
+				} else {
+					// Single line deletion (original logic)
+					const cursor = editor.getCursor();
+					const line = cursor.line;
+					const lineText = editor.getLine(line);
 
-				// Delete the new line character
-				if (line < editor.lineCount() - 1) {
+					// Delete the entire line
 					editor.replaceRange(
 						"",
 						{ line: line, ch: 0 },
-						{ line: line + 1, ch: 0 },
+						{ line: line, ch: lineText.length },
 						"delete-line"
 					);
+
+					// Delete the new line character
+					if (line < editor.lineCount() - 1) {
+						editor.replaceRange(
+							"",
+							{ line: line, ch: 0 },
+							{ line: line + 1, ch: 0 },
+							"delete-line"
+						);
+					}
 				}
 			},
 		});
@@ -38,31 +84,63 @@ export default class EditorShortcutsPlugin extends Plugin {
 			id: "move-line-up",
 			name: "Move current line up",
 			editorCallback: (editor: Editor) => {
-				const cursor = editor.getCursor();
-				const line = cursor.line;
+				const { hasMultiLineSelection, startLine, endLine } = getSelectedLineRange(editor);
 
-				if (line > 0) {
-					const currentLineText = editor.getLine(line);
-					const prevLineText = editor.getLine(line - 1);
+				if (hasMultiLineSelection) {
+					// Move multiple lines up
+					if (startLine === 0) return; // Can't move up from first line
 
-					// Replace the previous line with the current line
+					// Extract the line above the selection
+					const lineAbove = editor.getLine(startLine - 1);
+					
+					// Extract all selected lines
+					const selectedLines: string[] = [];
+					for (let i = startLine; i <= endLine; i++) {
+						selectedLines.push(editor.getLine(i));
+					}
+
+					// Replace the range: selected lines, then line above
+					const newContent = selectedLines.join("\n") + "\n" + lineAbove;
 					editor.replaceRange(
-						currentLineText,
-						{ line: line - 1, ch: 0 },
-						{ line: line - 1, ch: prevLineText.length },
+						newContent,
+						{ line: startLine - 1, ch: 0 },
+						{ line: endLine, ch: editor.getLine(endLine).length },
 						"move-line"
 					);
 
-					// Replace the current line with the previous line
-					editor.replaceRange(
-						prevLineText,
-						{ line: line, ch: 0 },
-						{ line: line, ch: currentLineText.length },
-						"move-line"
+					// Restore selection, shifted up by 1
+					editor.setSelection(
+						{ line: startLine - 1, ch: 0 },
+						{ line: endLine - 1, ch: editor.getLine(endLine - 1).length }
 					);
+				} else {
+					// Single line move (original logic)
+					const cursor = editor.getCursor();
+					const line = cursor.line;
 
-					// Move the cursor up a line while maintaining the same column position
-					editor.setCursor({ line: line - 1, ch: cursor.ch });
+					if (line > 0) {
+						const currentLineText = editor.getLine(line);
+						const prevLineText = editor.getLine(line - 1);
+
+						// Replace the previous line with the current line
+						editor.replaceRange(
+							currentLineText,
+							{ line: line - 1, ch: 0 },
+							{ line: line - 1, ch: prevLineText.length },
+							"move-line"
+						);
+
+						// Replace the current line with the previous line
+						editor.replaceRange(
+							prevLineText,
+							{ line: line, ch: 0 },
+							{ line: line, ch: currentLineText.length },
+							"move-line"
+						);
+
+						// Move the cursor up a line while maintaining the same column position
+						editor.setCursor({ line: line - 1, ch: cursor.ch });
+					}
 				}
 			},
 		});
@@ -72,31 +150,64 @@ export default class EditorShortcutsPlugin extends Plugin {
 			id: "move-line-down",
 			name: "Move current line down",
 			editorCallback: (editor: Editor) => {
-				const cursor = editor.getCursor();
-				const line = cursor.line;
+				const { hasMultiLineSelection, startLine, endLine } = getSelectedLineRange(editor);
 
-				if (line < editor.lineCount() - 1) {
-					const currentLineText = editor.getLine(line);
-					const nextLineText = editor.getLine(line + 1);
+				if (hasMultiLineSelection) {
+					// Move multiple lines down
+					const lastLine = editor.lineCount() - 1;
+					if (endLine === lastLine) return; // Can't move down from last line
 
-					// Replace the next line with the current line
+					// Extract all selected lines
+					const selectedLines: string[] = [];
+					for (let i = startLine; i <= endLine; i++) {
+						selectedLines.push(editor.getLine(i));
+					}
+
+					// Extract the line below the selection
+					const lineBelow = editor.getLine(endLine + 1);
+
+					// Replace the range: line below, then selected lines
+					const newContent = lineBelow + "\n" + selectedLines.join("\n");
 					editor.replaceRange(
-						currentLineText,
-						{ line: line + 1, ch: 0 },
-						{ line: line + 1, ch: nextLineText.length },
+						newContent,
+						{ line: startLine, ch: 0 },
+						{ line: endLine + 1, ch: editor.getLine(endLine + 1).length },
 						"move-line"
 					);
 
-					// Replace the current line with the next line
-					editor.replaceRange(
-						nextLineText,
-						{ line: line, ch: 0 },
-						{ line: line, ch: currentLineText.length },
-						"move-line"
+					// Restore selection, shifted down by 1
+					editor.setSelection(
+						{ line: startLine + 1, ch: 0 },
+						{ line: endLine + 1, ch: editor.getLine(endLine + 1).length }
 					);
+				} else {
+					// Single line move (original logic)
+					const cursor = editor.getCursor();
+					const line = cursor.line;
 
-					// Move the cursor down a line while maintaining the same column position
-					editor.setCursor({ line: line + 1, ch: cursor.ch });
+					if (line < editor.lineCount() - 1) {
+						const currentLineText = editor.getLine(line);
+						const nextLineText = editor.getLine(line + 1);
+
+						// Replace the next line with the current line
+						editor.replaceRange(
+							currentLineText,
+							{ line: line + 1, ch: 0 },
+							{ line: line + 1, ch: nextLineText.length },
+							"move-line"
+						);
+
+						// Replace the current line with the next line
+						editor.replaceRange(
+							nextLineText,
+							{ line: line, ch: 0 },
+							{ line: line, ch: currentLineText.length },
+							"move-line"
+						);
+
+						// Move the cursor down a line while maintaining the same column position
+						editor.setCursor({ line: line + 1, ch: cursor.ch });
+					}
 				}
 			},
 		});
