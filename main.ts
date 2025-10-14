@@ -13,7 +13,7 @@ export default class EditorShortcutsPlugin extends Plugin {
 				startLine: Math.min(from.line, to.line),
 				endLine: Math.max(from.line, to.line),
 				from,
-				to
+				to,
 			};
 		};
 
@@ -21,19 +21,30 @@ export default class EditorShortcutsPlugin extends Plugin {
 		this.addCommand({
 			id: "delete-current-line",
 			name: "Delete current line",
+			hotkeys: [
+				{
+					modifiers: ["Ctrl", "Shift"],
+					key: "Backspace",
+				},
+			],
 			editorCallback: (editor: Editor) => {
-				const { hasMultiLineSelection, startLine, endLine } = getSelectedLineRange(editor);
+				const { hasMultiLineSelection, startLine, endLine } =
+					getSelectedLineRange(editor);
 
 				if (hasMultiLineSelection) {
 					// Delete multiple lines
 					const lastLine = editor.lineCount() - 1;
-					
+
 					if (endLine === lastLine) {
 						// If deleting lines at the end, also delete the newline before them
-						const startCh = startLine > 0 ? editor.getLine(startLine - 1).length : 0;
-						const startDeleteLine = startLine > 0 ? startLine - 1 : startLine;
+						const startCh =
+							startLine > 0
+								? editor.getLine(startLine - 1).length
+								: 0;
+						const startDeleteLine =
+							startLine > 0 ? startLine - 1 : startLine;
 						const endLineText = editor.getLine(endLine);
-						
+
 						editor.replaceRange(
 							"",
 							{ line: startDeleteLine, ch: startCh },
@@ -49,7 +60,7 @@ export default class EditorShortcutsPlugin extends Plugin {
 							"delete-line"
 						);
 					}
-					
+
 					// Position cursor at the start of where deletion happened
 					editor.setCursor({ line: startLine, ch: 0 });
 				} else {
@@ -83,8 +94,15 @@ export default class EditorShortcutsPlugin extends Plugin {
 		this.addCommand({
 			id: "move-line-up",
 			name: "Move current line up",
+			hotkeys: [
+				{
+					modifiers: ["Alt"],
+					key: "ArrowUp",
+				},
+			],
 			editorCallback: (editor: Editor) => {
-				const { hasMultiLineSelection, startLine, endLine } = getSelectedLineRange(editor);
+				const { hasMultiLineSelection, startLine, endLine } =
+					getSelectedLineRange(editor);
 
 				if (hasMultiLineSelection) {
 					// Move multiple lines up
@@ -92,7 +110,7 @@ export default class EditorShortcutsPlugin extends Plugin {
 
 					// Extract the line above the selection
 					const lineAbove = editor.getLine(startLine - 1);
-					
+
 					// Extract all selected lines
 					const selectedLines: string[] = [];
 					for (let i = startLine; i <= endLine; i++) {
@@ -100,7 +118,8 @@ export default class EditorShortcutsPlugin extends Plugin {
 					}
 
 					// Replace the range: selected lines, then line above
-					const newContent = selectedLines.join("\n") + "\n" + lineAbove;
+					const newContent =
+						selectedLines.join("\n") + "\n" + lineAbove;
 					editor.replaceRange(
 						newContent,
 						{ line: startLine - 1, ch: 0 },
@@ -111,7 +130,10 @@ export default class EditorShortcutsPlugin extends Plugin {
 					// Restore selection, shifted up by 1
 					editor.setSelection(
 						{ line: startLine - 1, ch: 0 },
-						{ line: endLine - 1, ch: editor.getLine(endLine - 1).length }
+						{
+							line: endLine - 1,
+							ch: editor.getLine(endLine - 1).length,
+						}
 					);
 				} else {
 					// Single line move (original logic)
@@ -149,8 +171,15 @@ export default class EditorShortcutsPlugin extends Plugin {
 		this.addCommand({
 			id: "move-line-down",
 			name: "Move current line down",
+			hotkeys: [
+				{
+					modifiers: ["Alt"],
+					key: "ArrowDown",
+				},
+			],
 			editorCallback: (editor: Editor) => {
-				const { hasMultiLineSelection, startLine, endLine } = getSelectedLineRange(editor);
+				const { hasMultiLineSelection, startLine, endLine } =
+					getSelectedLineRange(editor);
 
 				if (hasMultiLineSelection) {
 					// Move multiple lines down
@@ -167,18 +196,25 @@ export default class EditorShortcutsPlugin extends Plugin {
 					const lineBelow = editor.getLine(endLine + 1);
 
 					// Replace the range: line below, then selected lines
-					const newContent = lineBelow + "\n" + selectedLines.join("\n");
+					const newContent =
+						lineBelow + "\n" + selectedLines.join("\n");
 					editor.replaceRange(
 						newContent,
 						{ line: startLine, ch: 0 },
-						{ line: endLine + 1, ch: editor.getLine(endLine + 1).length },
+						{
+							line: endLine + 1,
+							ch: editor.getLine(endLine + 1).length,
+						},
 						"move-line"
 					);
 
 					// Restore selection, shifted down by 1
 					editor.setSelection(
 						{ line: startLine + 1, ch: 0 },
-						{ line: endLine + 1, ch: editor.getLine(endLine + 1).length }
+						{
+							line: endLine + 1,
+							ch: editor.getLine(endLine + 1).length,
+						}
 					);
 				} else {
 					// Single line move (original logic)
@@ -216,6 +252,12 @@ export default class EditorShortcutsPlugin extends Plugin {
 		this.addCommand({
 			id: "duplicate-line",
 			name: "Duplicate current line",
+			hotkeys: [
+				{
+					modifiers: ["Alt"],
+					key: "D",
+				},
+			],
 			editorCallback: (editor: Editor) => {
 				const cursor = editor.getCursor();
 				const line = cursor.line;
@@ -231,6 +273,28 @@ export default class EditorShortcutsPlugin extends Plugin {
 
 				// Move the cursor to the duplicated line
 				editor.setCursor({ line: line + 1, ch: cursor.ch });
+			},
+		});
+
+		// Command to toggle both sidebars
+		this.addCommand({
+			id: "toggle-both-sidebars",
+			name: "Toggle both sidebars",
+			hotkeys: [
+				{
+					modifiers: ["Ctrl"],
+					key: "B",
+				},
+			],
+			callback: () => {
+				// @ts-ignore
+				this.app.commands.commands[
+					"app:toggle-left-sidebar"
+				].checkCallback();
+				// @ts-ignore
+				this.app.commands.commands[
+					"app:toggle-right-sidebar"
+				].checkCallback();
 			},
 		});
 	}
