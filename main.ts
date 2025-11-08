@@ -21,6 +21,7 @@ export default class EditorShortcutsPlugin extends Plugin {
 		this.addCommand({
 			id: "delete-current-line",
 			name: "Delete current line",
+			icon: "delete",
 			hotkeys: [
 				{
 					modifiers: ["Ctrl", "Shift"],
@@ -94,6 +95,7 @@ export default class EditorShortcutsPlugin extends Plugin {
 		this.addCommand({
 			id: "move-line-up",
 			name: "Move current line up",
+			icon: "arrow-up-from-line",
 			hotkeys: [
 				{
 					modifiers: ["Alt"],
@@ -171,6 +173,7 @@ export default class EditorShortcutsPlugin extends Plugin {
 		this.addCommand({
 			id: "move-line-down",
 			name: "Move current line down",
+			icon: "arrow-down-from-line",
 			hotkeys: [
 				{
 					modifiers: ["Alt"],
@@ -252,6 +255,7 @@ export default class EditorShortcutsPlugin extends Plugin {
 		this.addCommand({
 			id: "duplicate-line",
 			name: "Duplicate current line",
+			icon: "layers-2",
 			hotkeys: [
 				{
 					modifiers: ["Alt"],
@@ -280,6 +284,7 @@ export default class EditorShortcutsPlugin extends Plugin {
 		this.addCommand({
 			id: "toggle-both-sidebars",
 			name: "Toggle both sidebars",
+			icon: "columns-3",
 			hotkeys: [
 				{
 					modifiers: ["Ctrl"],
