@@ -50,7 +50,7 @@ export default class EditorShortcutsPlugin extends Plugin {
 							"",
 							{ line: startDeleteLine, ch: startCh },
 							{ line: endLine, ch: endLineText.length },
-							"delete-line"
+							"delete-line",
 						);
 					} else {
 						// Delete from start of first line to start of line after last line
@@ -58,7 +58,7 @@ export default class EditorShortcutsPlugin extends Plugin {
 							"",
 							{ line: startLine, ch: 0 },
 							{ line: endLine + 1, ch: 0 },
-							"delete-line"
+							"delete-line",
 						);
 					}
 
@@ -75,7 +75,7 @@ export default class EditorShortcutsPlugin extends Plugin {
 						"",
 						{ line: line, ch: 0 },
 						{ line: line, ch: lineText.length },
-						"delete-line"
+						"delete-line",
 					);
 
 					// Delete the new line character
@@ -84,7 +84,7 @@ export default class EditorShortcutsPlugin extends Plugin {
 							"",
 							{ line: line, ch: 0 },
 							{ line: line + 1, ch: 0 },
-							"delete-line"
+							"delete-line",
 						);
 					}
 				}
@@ -126,7 +126,7 @@ export default class EditorShortcutsPlugin extends Plugin {
 						newContent,
 						{ line: startLine - 1, ch: 0 },
 						{ line: endLine, ch: editor.getLine(endLine).length },
-						"move-line"
+						"move-line",
 					);
 
 					// Restore selection, shifted up by 1
@@ -135,7 +135,7 @@ export default class EditorShortcutsPlugin extends Plugin {
 						{
 							line: endLine - 1,
 							ch: editor.getLine(endLine - 1).length,
-						}
+						},
 					);
 				} else {
 					// Single line move (original logic)
@@ -151,7 +151,7 @@ export default class EditorShortcutsPlugin extends Plugin {
 							currentLineText,
 							{ line: line - 1, ch: 0 },
 							{ line: line - 1, ch: prevLineText.length },
-							"move-line"
+							"move-line",
 						);
 
 						// Replace the current line with the previous line
@@ -159,7 +159,7 @@ export default class EditorShortcutsPlugin extends Plugin {
 							prevLineText,
 							{ line: line, ch: 0 },
 							{ line: line, ch: currentLineText.length },
-							"move-line"
+							"move-line",
 						);
 
 						// Move the cursor up a line while maintaining the same column position
@@ -208,7 +208,7 @@ export default class EditorShortcutsPlugin extends Plugin {
 							line: endLine + 1,
 							ch: editor.getLine(endLine + 1).length,
 						},
-						"move-line"
+						"move-line",
 					);
 
 					// Restore selection, shifted down by 1
@@ -217,7 +217,7 @@ export default class EditorShortcutsPlugin extends Plugin {
 						{
 							line: endLine + 1,
 							ch: editor.getLine(endLine + 1).length,
-						}
+						},
 					);
 				} else {
 					// Single line move (original logic)
@@ -233,7 +233,7 @@ export default class EditorShortcutsPlugin extends Plugin {
 							currentLineText,
 							{ line: line + 1, ch: 0 },
 							{ line: line + 1, ch: nextLineText.length },
-							"move-line"
+							"move-line",
 						);
 
 						// Replace the current line with the next line
@@ -241,7 +241,7 @@ export default class EditorShortcutsPlugin extends Plugin {
 							nextLineText,
 							{ line: line, ch: 0 },
 							{ line: line, ch: currentLineText.length },
-							"move-line"
+							"move-line",
 						);
 
 						// Move the cursor down a line while maintaining the same column position
@@ -272,11 +272,54 @@ export default class EditorShortcutsPlugin extends Plugin {
 					"\n" + lineText,
 					{ line: line, ch: lineText.length },
 					{ line: line, ch: lineText.length },
-					"duplicate-line"
+					"duplicate-line",
 				);
 
 				// Move the cursor to the duplicated line
 				editor.setCursor({ line: line + 1, ch: cursor.ch });
+			},
+		});
+
+		// Command to remove extra double newlines
+		this.addCommand({
+			id: "remove-extra-newlines",
+			name: "Remove extra newlines after pasting",
+			icon: "chevrons-down-up",
+
+			editorCheckCallback: (checking: boolean, editor: Editor) => {
+				const { hasMultiLineSelection, startLine, endLine } =
+					getSelectedLineRange(editor);
+
+				if (checking) {
+					// First run - check if command should appear in palette
+					return hasMultiLineSelection;
+				}
+
+				if (!hasMultiLineSelection) {
+					console.error(
+						"This should not be happening: hasMultiLineSelection =" +
+							hasMultiLineSelection,
+					);
+					return; // Do nothing if no multi-line selection
+				}
+
+				// Extract all selected lines
+				const selectedLines: string[] = [];
+				for (let i = startLine; i <= endLine; i++) {
+					selectedLines.push(editor.getLine(i));
+				}
+
+				const processedText = selectedLines
+					.join("\n")
+					.replace(/\n[ \t]*\n(?![#])/g, "\n");
+
+				// Replace the selected text with the processed text
+				editor.replaceRange(
+					processedText,
+					{ line: startLine, ch: 0 },
+					{ line: endLine, ch: editor.getLine(endLine).length },
+					"remove-newlines",
+				);
 			},
 		});
 
