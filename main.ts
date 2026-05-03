@@ -335,15 +335,20 @@ export default class EditorShortcutsPlugin extends Plugin {
 				},
 			],
 			callback: () => {
-				// @ts-ignore
-				this.app.commands.commands[
-					"app:toggle-left-sidebar"
-				].checkCallback();
-				// @ts-ignore
-				this.app.commands.commands[
-					"app:toggle-right-sidebar"
-				].checkCallback();
-			},
+    			const { leftSplit, rightSplit } = this.app.workspace;
+
+				// If either one is open, close them both. 
+				// Otherwise (if both are closed), open them both.
+				const shouldCloseAll = !leftSplit.collapsed || !rightSplit.collapsed;
+
+				if (shouldCloseAll) {
+					leftSplit.collapse();
+					rightSplit.collapse();
+				} else {
+					leftSplit.expand();
+					rightSplit.expand();
+				}
+			}
 		});
 	}
 
