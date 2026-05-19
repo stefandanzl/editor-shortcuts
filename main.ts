@@ -296,7 +296,8 @@ export default class EditorShortcutsPlugin extends Plugin {
 					selectedLines.push(editor.getLine(i));
 				}
 
-				const processedText = selectedLines.join("\n").replace(/\n[ \t]*\n(?!#|---)/g, "\n");
+				let processedText = selectedLines.join("\n").replace(/\n[ \t]*\n(?!#|---)/g, "\n");
+				processedText = processedText.replace(/\n\n[ \t]*---[ \t]*\n/g, "\n\n");
 
 				// Replace the selected text with the processed text
 				editor.replaceRange(
