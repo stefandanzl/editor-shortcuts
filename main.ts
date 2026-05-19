@@ -2,8 +2,6 @@ import { Plugin, Editor } from "obsidian";
 
 export default class EditorShortcutsPlugin extends Plugin {
 	async onload() {
-		console.log("Loading Editor Shortcuts plugin");
-
 		// Helper function to get selected line range
 		const getSelectedLineRange = (editor: Editor) => {
 			const from = editor.getCursor("from");
@@ -29,8 +27,7 @@ export default class EditorShortcutsPlugin extends Plugin {
 				},
 			],
 			editorCallback: (editor: Editor) => {
-				const { hasMultiLineSelection, startLine, endLine } =
-					getSelectedLineRange(editor);
+				const { hasMultiLineSelection, startLine, endLine } = getSelectedLineRange(editor);
 
 				if (hasMultiLineSelection) {
 					// Delete multiple lines
@@ -38,12 +35,8 @@ export default class EditorShortcutsPlugin extends Plugin {
 
 					if (endLine === lastLine) {
 						// If deleting lines at the end, also delete the newline before them
-						const startCh =
-							startLine > 0
-								? editor.getLine(startLine - 1).length
-								: 0;
-						const startDeleteLine =
-							startLine > 0 ? startLine - 1 : startLine;
+						const startCh = startLine > 0 ? editor.getLine(startLine - 1).length : 0;
+						const startDeleteLine = startLine > 0 ? startLine - 1 : startLine;
 						const endLineText = editor.getLine(endLine);
 
 						editor.replaceRange(
@@ -103,8 +96,7 @@ export default class EditorShortcutsPlugin extends Plugin {
 				},
 			],
 			editorCallback: (editor: Editor) => {
-				const { hasMultiLineSelection, startLine, endLine } =
-					getSelectedLineRange(editor);
+				const { hasMultiLineSelection, startLine, endLine } = getSelectedLineRange(editor);
 
 				if (hasMultiLineSelection) {
 					// Move multiple lines up
@@ -120,8 +112,7 @@ export default class EditorShortcutsPlugin extends Plugin {
 					}
 
 					// Replace the range: selected lines, then line above
-					const newContent =
-						selectedLines.join("\n") + "\n" + lineAbove;
+					const newContent = selectedLines.join("\n") + "\n" + lineAbove;
 					editor.replaceRange(
 						newContent,
 						{ line: startLine - 1, ch: 0 },
@@ -181,8 +172,7 @@ export default class EditorShortcutsPlugin extends Plugin {
 				},
 			],
 			editorCallback: (editor: Editor) => {
-				const { hasMultiLineSelection, startLine, endLine } =
-					getSelectedLineRange(editor);
+				const { hasMultiLineSelection, startLine, endLine } = getSelectedLineRange(editor);
 
 				if (hasMultiLineSelection) {
 					// Move multiple lines down
@@ -199,8 +189,7 @@ export default class EditorShortcutsPlugin extends Plugin {
 					const lineBelow = editor.getLine(endLine + 1);
 
 					// Replace the range: line below, then selected lines
-					const newContent =
-						lineBelow + "\n" + selectedLines.join("\n");
+					const newContent = lineBelow + "\n" + selectedLines.join("\n");
 					editor.replaceRange(
 						newContent,
 						{ line: startLine, ch: 0 },
@@ -287,8 +276,7 @@ export default class EditorShortcutsPlugin extends Plugin {
 			icon: "chevrons-down-up",
 
 			editorCheckCallback: (checking: boolean, editor: Editor) => {
-				const { hasMultiLineSelection, startLine, endLine } =
-					getSelectedLineRange(editor);
+				const { hasMultiLineSelection, startLine, endLine } = getSelectedLineRange(editor);
 
 				if (checking) {
 					// First run - check if command should appear in palette
@@ -297,8 +285,7 @@ export default class EditorShortcutsPlugin extends Plugin {
 
 				if (!hasMultiLineSelection) {
 					console.error(
-						"This should not be happening: hasMultiLineSelection =" +
-							hasMultiLineSelection,
+						"This should not be happening: hasMultiLineSelection =" + hasMultiLineSelection,
 					);
 					return; // Do nothing if no multi-line selection
 				}
@@ -309,9 +296,7 @@ export default class EditorShortcutsPlugin extends Plugin {
 					selectedLines.push(editor.getLine(i));
 				}
 
-				const processedText = selectedLines
-					.join("\n")
-					.replace(/\n[ \t]*\n(?!#|---)/g, "\n");
+				const processedText = selectedLines.join("\n").replace(/\n[ \t]*\n(?!#|---)/g, "\n");
 
 				// Replace the selected text with the processed text
 				editor.replaceRange(
@@ -335,9 +320,9 @@ export default class EditorShortcutsPlugin extends Plugin {
 				},
 			],
 			callback: () => {
-    			const { leftSplit, rightSplit } = this.app.workspace;
+				const { leftSplit, rightSplit } = this.app.workspace;
 
-				// If either one is open, close them both. 
+				// If either one is open, close them both.
 				// Otherwise (if both are closed), open them both.
 				const shouldCloseAll = !leftSplit.collapsed || !rightSplit.collapsed;
 
@@ -348,11 +333,59 @@ export default class EditorShortcutsPlugin extends Plugin {
 					leftSplit.expand();
 					rightSplit.expand();
 				}
-			}
+			},
 		});
-	}
 
-	onunload() {
-		console.log("Unloading Editor Shortcuts plugin");
+		// Command to cycle through bullet point styles: - → + → * → (no bullet) → -
+		this.addCommand({
+			id: "cycle-bullet-style",
+			name: "Cycle bullet style",
+			icon: "list-bullets",
+			editorCallback: (editor: Editor) => {
+				const cursor = editor.getCursor();
+				const line = editor.getLine(cursor.line);
+
+				// Match: optional indentation, then bullet marker, then space
+				const match = line.match(/^(\s*)([-+*])(\s)/);
+
+				if (!match) {
+					// Line is not a bullet - make it a bullet with '-'
+					const indentMatch = line.match(/^(\s*)/);
+					const indent = indentMatch ? indentMatch[1] : "";
+					const content = line.trim();
+					const newLine = content ? `${indent}- ${content}` : `${indent}-`;
+					editor.setLine(cursor.line, newLine);
+					editor.setCursor({ line: cursor.line, ch: newLine.length });
+				} else {
+					const [, indent, marker, space] = match;
+					const content = line.slice(match[0].length);
+
+					// Cycle: - → + → * → (no bullet) → -
+					// Check if it's a checkbox (- [x], - [ ], + [x], * [x], etc.)
+					const checkboxMatch = content.match(/^(\[[ x]\]\s*)(.*)/s);
+
+					if (checkboxMatch) {
+						// Remove checkbox, start with plain '-'
+						const [, , checkboxContent] = checkboxMatch;
+						const newLine = `${indent}- ${checkboxContent}`;
+						editor.setLine(cursor.line, newLine);
+						editor.setCursor({ line: cursor.line, ch: newLine.length });
+					} else if (marker === "-") {
+						const newLine = `${indent}+${space}${content}`;
+						editor.setLine(cursor.line, newLine);
+						editor.setCursor(cursor);
+					} else if (marker === "+") {
+						const newLine = `${indent}*${space}${content}`;
+						editor.setLine(cursor.line, newLine);
+						editor.setCursor(cursor);
+					} else if (marker === "*") {
+						// Remove bullet
+						const newLine = `${indent}${content}`;
+						editor.setLine(cursor.line, newLine);
+						editor.setCursor({ line: cursor.line, ch: indent.length });
+					}
+				}
+			},
+		});
 	}
 }
