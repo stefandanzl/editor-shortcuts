@@ -3,8 +3,8 @@ import { EditorView } from "@codemirror/view";
 import { syntaxTree } from "@codemirror/language";
 
 const REPLACEMENTS = [
-	{ trigger: "-->", replacement: "→" },
-	{ trigger: "<--", replacement: "←" },
+	{ trigger: "-->", replacement: "\u{27F6}" },
+	{ trigger: "<--", replacement: "\u{27F5}" },
 ];
 
 const replacementExtension = EditorView.inputHandler.of((view, from, to, text) => {
