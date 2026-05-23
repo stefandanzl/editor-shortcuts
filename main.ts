@@ -11,11 +11,16 @@ const replacementExtension = EditorView.inputHandler.of((view, from, to, text) =
 	if (text.length !== 1) return false;
 
 	for (const r of REPLACEMENTS) {
-		if (text !== r.trigger.slice(-1)) continue;
-		const before = view.state.doc.sliceString(from - r.trigger.length + 1, from);
-		if (before !== r.trigger.slice(0, -1)) continue;
+		const lastChar = r.trigger.slice(-1);
+		const prefix = r.trigger.slice(0, -1);
 
-		// Skip code blocks
+		if (text !== lastChar) continue;
+		if (from < prefix.length) continue;
+
+		const before = view.state.doc.sliceString(from - prefix.length, from);
+		if (before !== prefix) continue;
+
+		// Code-Kontext skippen
 		const node = syntaxTree(view.state).resolveInner(from, -1);
 		let n: any = node;
 		while (n) {
@@ -23,11 +28,20 @@ const replacementExtension = EditorView.inputHandler.of((view, from, to, text) =
 			n = n.parent;
 		}
 
-		view.dispatch({
-			changes: { from: from - r.trigger.length + 1, to, insert: r.replacement },
-			userEvent: "input.replace",
+		// Replacement asynchron als separate Transaction
+		// (nach dem normalen Input-Insert)
+		queueMicrotask(() => {
+			// Position neu berechnen — könnte sich verschoben haben
+			const replaceFrom = from - prefix.length;
+			const replaceTo = from + 1; // +1 weil das getippte Zeichen jetzt drin ist
+
+			view.dispatch({
+				changes: { from: replaceFrom, to: replaceTo, insert: r.replacement },
+				userEvent: "input.replace",
+			});
 		});
-		return true;
+
+		return false; // false = Input normal verarbeiten lassen
 	}
 	return false;
 });
