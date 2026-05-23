@@ -1,7 +1,42 @@
 import { Plugin, Editor } from "obsidian";
+import { EditorView } from "@codemirror/view";
+import { syntaxTree } from "@codemirror/language";
+
+const REPLACEMENTS = [
+	{ trigger: "-->", replacement: "→" },
+	{ trigger: "<--", replacement: "←" },
+];
+
+const replacementExtension = EditorView.inputHandler.of((view, from, to, text) => {
+	if (text.length !== 1) return false;
+
+	for (const r of REPLACEMENTS) {
+		if (text !== r.trigger.slice(-1)) continue;
+		const before = view.state.doc.sliceString(from - r.trigger.length + 1, from);
+		if (before !== r.trigger.slice(0, -1)) continue;
+
+		// Skip code blocks
+		const node = syntaxTree(view.state).resolveInner(from, -1);
+		let n: any = node;
+		while (n) {
+			if (n.name.toLowerCase().includes("code")) return false;
+			n = n.parent;
+		}
+
+		view.dispatch({
+			changes: { from: from - r.trigger.length + 1, to, insert: r.replacement },
+			userEvent: "input.replace",
+		});
+		return true;
+	}
+	return false;
+});
 
 export default class EditorShortcutsPlugin extends Plugin {
 	async onload() {
+		// Register the arrow symbol replacement extension
+		this.registerEditorExtension(replacementExtension);
+
 		// Helper function to get selected line range
 		const getSelectedLineRange = (editor: Editor) => {
 			const from = editor.getCursor("from");
