@@ -1,4 +1,4 @@
-import { Plugin, Editor } from "obsidian";
+import { Plugin, Editor, Notice } from "obsidian";
 import { EditorView } from "@codemirror/view";
 import { syntaxTree } from "@codemirror/language";
 
@@ -434,6 +434,49 @@ export default class EditorShortcutsPlugin extends Plugin {
 						editor.setLine(cursor.line, newLine);
 						editor.setCursor({ line: cursor.line, ch: indent.length });
 					}
+				}
+			},
+		});
+
+		// Command to paste image URL as markdown with filename as alt text
+		this.addCommand({
+			id: "embed-image-url",
+			name: "Embed image URL from clipboard",
+			icon: "image",
+			editorCallback: async (editor: Editor) => {
+				try {
+					// Read from clipboard
+					const clipboardText = await navigator.clipboard.readText();
+					const url = clipboardText.trim();
+
+					// Check if it looks like a URL
+					if (!url.match(/^https?:\/\//i)) {
+						new Notice("Clipboard doesn't contain a valid URL");
+						return;
+					}
+
+					// Extract filename from URL
+					const urlObj = new URL(url);
+					const pathname = urlObj.pathname;
+					const filenameWithExt = pathname.split("/").pop() || "image";
+
+					// Remove file extension
+					const filename = filenameWithExt.replace(/\.[^/.]+$/, "");
+
+					// Format as markdown image
+					const markdownImage = `![${filename}](${url})`;
+
+					// Insert at cursor position
+					const cursor = editor.getCursor();
+					editor.replaceRange(markdownImage, cursor, cursor, "paste-image");
+
+					// Move cursor to end of inserted text
+					editor.setCursor({
+						line: cursor.line,
+						ch: cursor.ch + markdownImage.length,
+					});
+				} catch (error) {
+					new Notice("Failed to read clipboard: " + error.message);
 				}
 			},
 		});

@@ -14,7 +14,8 @@
 		"strictPropertyInitialization": false,
 		"allowSyntheticDefaultImports": true,
 		"lib": ["DOM", "ES2022"],
-		"paths": { "*": ["./*"] }
+		"paths": { "*": ["./*"] },
+		"useUnknownInCatchVariables": false
 	},
 	"include": ["**/*.ts"],
 	"exclude": ["node_modules", "tests/"]
