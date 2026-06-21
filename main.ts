@@ -1,4 +1,4 @@
-import { Plugin, Editor, Notice } from "obsidian";
+import { Plugin, Editor, MarkdownView, Notice } from "obsidian";
 import { EditorView } from "@codemirror/view";
 import { syntaxTree } from "@codemirror/language";
 
@@ -435,6 +435,102 @@ export default class EditorShortcutsPlugin extends Plugin {
 						editor.setCursor({ line: cursor.line, ch: indent.length });
 					}
 				}
+			},
+		});
+
+		// Command to fill selected vertical table cells with the value of the topmost cell
+		this.addCommand({
+			id: "table-fill-down",
+			name: "Table Fill Down",
+			icon: "table",
+			editorCallback: (editor: Editor, ctx) => {
+				if (!(ctx instanceof MarkdownView)) {
+					new Notice("No active tab!");
+					return;
+				}
+				const containerEl = ctx.containerEl;
+
+				// 1. Get selected cells
+				const selectedCells = Array.from(
+					containerEl.querySelectorAll<HTMLElement>(".cm-embed-block .is-selected"),
+				);
+				if (selectedCells.length < 2) {
+					new Notice("Please select at least two vertical cells!");
+					return;
+				}
+
+				// 2. Collect data about the selection
+				const cellData = selectedCells.map((cell) => {
+					const parentRow = cell.closest("tr") as HTMLElement;
+					const allRows = Array.from(parentRow.parentElement!.children);
+					return {
+						columnIndex: Array.from(parentRow.children).indexOf(cell),
+						rowIndex: allRows.indexOf(parentRow),
+						content: cell.innerText?.trim(),
+					};
+				});
+
+				const fillValue = cellData[0].content;
+				const targetColumn = cellData[0].columnIndex;
+
+				// Offset the DOM row index by +1 so it matches the real data rows in the markdown
+				const affectedRows = cellData.map((c) => c.rowIndex + 1);
+
+				// 3. Manipulate the markdown text via CodeMirror
+				const cmView = (editor as any).cm;
+				const state = cmView.state;
+
+				const head = state.selection.main.head;
+				const currentLine = state.doc.lineAt(head);
+
+				let startLineNo = currentLine.number;
+				while (
+					startLineNo > 1 &&
+					state.doc.lineAt(state.doc.line(startLineNo - 1).from).text.includes("|")
+				) {
+					startLineNo--;
+				}
+
+				let endLineNo = currentLine.number;
+				while (
+					endLineNo < state.doc.lines &&
+					state.doc.lineAt(state.doc.line(endLineNo + 1).from).text.includes("|")
+				) {
+					endLineNo++;
+				}
+
+				let tableRowIndex = 0; // Counter for the data rows in the markdown
+
+				cmView.dispatch({
+					changes: Array.from({ length: endLineNo - startLineNo + 1 }, (_, i) => {
+						const lineNo = startLineNo + i;
+						const line = state.doc.line(lineNo);
+
+						// Skip separator row
+						if (line.text.includes("---")) {
+							return null;
+						}
+
+						const currentTableLineIndex = tableRowIndex;
+						tableRowIndex++;
+
+						// Match against the corrected affected rows
+						if (affectedRows.includes(currentTableLineIndex)) {
+							const parts = line.text.split("|");
+							const hasLeading = line.text.trim().startsWith("|");
+							const arrayIndex = hasLeading ? targetColumn + 1 : targetColumn;
+
+							parts[arrayIndex] = ` ${fillValue} `;
+
+							return {
+								from: line.from,
+								to: line.to,
+								insert: parts.join("|"),
+							};
+						}
+						return null;
+					}).filter((x) => x !== null),
+				});
 			},
 		});
 
