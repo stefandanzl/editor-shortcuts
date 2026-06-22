@@ -1,4 +1,4 @@
-import { Plugin, Editor, MarkdownView, Notice } from "obsidian";
+import { Plugin, Editor, MarkdownView, Notice, EditorPosition } from "obsidian";
 import { EditorView } from "@codemirror/view";
 import { syntaxTree } from "@codemirror/language";
 
@@ -448,7 +448,10 @@ export default class EditorShortcutsPlugin extends Plugin {
 					}
 				}
 
-				// 2. Apply this synchronized target style to ALL selected lines
+				// 2. Build the transformed block in memory first, so we can apply it
+				//    as a SINGLE replaceRange — one transaction = one undo step for
+				//    the whole multi-line change (instead of one undo per line).
+				const newLines: string[] = [];
 				for (let i = startLine; i <= endLine; i++) {
 					const line = editor.getLine(i);
 					const match = line.match(/^(\s*)([-+*])(\s)/);
@@ -459,10 +462,11 @@ export default class EditorShortcutsPlugin extends Plugin {
 							const indentMatch = line.match(/^(\s*)/);
 							const indent = indentMatch ? indentMatch[1] : "";
 							const content = line.trim();
-							const newLine = content
-								? `${indent}${targetMarker} ${content}`
-								: `${indent}${targetMarker} `;
-							editor.setLine(i, newLine);
+							newLines.push(
+								content ? `${indent}${targetMarker} ${content}` : `${indent}${targetMarker} `,
+							);
+						} else {
+							newLines.push(line);
 						}
 					} else {
 						// Line has an existing bullet
@@ -477,15 +481,23 @@ export default class EditorShortcutsPlugin extends Plugin {
 
 						if (targetMarker === "none") {
 							// Strip the bullet entirely
-							editor.setLine(i, `${indent}${content}`);
+							newLines.push(`${indent}${content}`);
 						} else {
 							// Update to the synchronized marker
-							editor.setLine(i, `${indent}${targetMarker}${space}${content}`);
+							newLines.push(`${indent}${targetMarker}${space}${content}`);
 						}
 					}
 				}
 
-				// 3. Keep the selection intact so the user can just hit the shortcut again
+				// 3. Apply the whole block atomically
+				editor.replaceRange(
+					newLines.join("\n"),
+					{ line: startLine, ch: 0 },
+					{ line: endLine, ch: editor.getLine(endLine).length },
+					"cycle-bullet",
+				);
+
+				// 4. Keep the selection intact so the user can just hit the shortcut again
 				editor.setSelection(
 					{ line: startLine, ch: 0 },
 					{ line: endLine, ch: editor.getLine(endLine).length },
@@ -493,7 +505,7 @@ export default class EditorShortcutsPlugin extends Plugin {
 			},
 		});
 
-		// Command to fill selected vertical table cells with the value of the topmost cell
+		// Command to fill selected vertical table cells (Excel-style behavior)
 		this.addCommand({
 			id: "table-fill-down",
 			name: "Table Fill Down",
@@ -505,7 +517,6 @@ export default class EditorShortcutsPlugin extends Plugin {
 				}
 				const containerEl = ctx.containerEl;
 
-				// 1. Fetch selected cells directly from the Live Preview UI
 				const selectedCells = Array.from(
 					containerEl.querySelectorAll<HTMLElement>(".cm-embed-block .is-selected"),
 				);
@@ -515,7 +526,6 @@ export default class EditorShortcutsPlugin extends Plugin {
 					return;
 				}
 
-				// 2. Gather data about the selection (column and row indices)
 				const cellData = selectedCells.map((cell) => {
 					const parentRow = cell.closest("tr") as HTMLElement;
 					const allRows = Array.from(parentRow.parentElement!.children);
@@ -528,39 +538,33 @@ export default class EditorShortcutsPlugin extends Plugin {
 
 				const fillValue = cellData[0].content;
 				const targetColumn = cellData[0].columnIndex;
-
-				// Map affected data rows (Index + 1 to account for the markdown assignment shift)
 				const affectedRows = cellData.map((c) => c.rowIndex + 1);
 
-				// 3. Locate the corresponding lines in the code document
 				const cmView = (editor as any).cm;
 				if (!cmView) return;
 
 				const state = cmView.state;
+				const initialSelection = state.selection; // Save the active table block selection range
 				const head = state.selection.main.head;
 				const currentLine = state.doc.lineAt(head);
 
-				// Find the start of the table in the markdown text
 				let startLineNo = currentLine.number;
 				while (startLineNo > 1 && state.doc.line(startLineNo - 1).text.includes("|")) {
 					startLineNo--;
 				}
 
-				// Find the end of the table in the markdown text
 				let endLineNo = currentLine.number;
 				while (endLineNo < state.doc.lines && state.doc.line(endLineNo + 1).text.includes("|")) {
 					endLineNo++;
 				}
 
-				let tableRowIndex = 0; // Counter for the actual markdown data rows
+				let tableRowIndex = 0;
 				const changes: any[] = [];
 
-				// 4. Transform the rows inside the markdown text
 				for (let lineNo = startLineNo; lineNo <= endLineNo; lineNo++) {
 					const line = state.doc.line(lineNo);
 					const text = line.text;
 
-					// Skip the separator row (|---|)
 					if (text.includes("---")) {
 						continue;
 					}
@@ -568,13 +572,11 @@ export default class EditorShortcutsPlugin extends Plugin {
 					const currentTableLineIndex = tableRowIndex;
 					tableRowIndex++;
 
-					// If this markdown line matches one of the selected UI rows
 					if (affectedRows.includes(currentTableLineIndex)) {
 						const parts = text.split("|");
 						const hasLeading = text.trim().startsWith("|");
 						const arrayIndex = hasLeading ? targetColumn + 1 : targetColumn;
 
-						// Overwrite the value in the target column
 						parts[arrayIndex] = ` ${fillValue} `;
 
 						changes.push({
@@ -585,9 +587,13 @@ export default class EditorShortcutsPlugin extends Plugin {
 					}
 				}
 
-				// 5. Dispatch changes atomically into CodeMirror
 				if (changes.length > 0) {
-					cmView.dispatch({ changes });
+					// Dispatch updates while passing back the initial selection so the grid remains active
+					cmView.dispatch({
+						changes,
+						selection: initialSelection,
+						userEvent: "input.type",
+					});
 				}
 			},
 		});
