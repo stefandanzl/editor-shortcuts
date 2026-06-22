@@ -280,87 +280,90 @@ export default class EditorShortcutsPlugin extends Plugin {
 				}
 				const containerEl = ctx.containerEl;
 
-				// 1. Get selected cells
+				// 1. Fetch selected cells directly from the Live Preview UI
 				const selectedCells = Array.from(
 					containerEl.querySelectorAll<HTMLElement>(".cm-embed-block .is-selected"),
 				);
+
 				if (selectedCells.length < 2) {
 					new Notice("Please select at least two vertical cells!");
 					return;
 				}
 
-				// 2. Collect data about the selection
+				// 2. Gather data about the selection (column and row indices)
 				const cellData = selectedCells.map((cell) => {
 					const parentRow = cell.closest("tr") as HTMLElement;
 					const allRows = Array.from(parentRow.parentElement!.children);
 					return {
 						columnIndex: Array.from(parentRow.children).indexOf(cell),
 						rowIndex: allRows.indexOf(parentRow),
-						content: cell.innerText?.trim(),
+						content: cell.innerText?.trim() || "",
 					};
 				});
 
 				const fillValue = cellData[0].content;
 				const targetColumn = cellData[0].columnIndex;
 
-				// Offset the DOM row index by +1 so it matches the real data rows in the markdown
+				// Map affected data rows (Index + 1 to account for the markdown assignment shift)
 				const affectedRows = cellData.map((c) => c.rowIndex + 1);
 
-				// 3. Manipulate the markdown text via CodeMirror
+				// 3. Locate the corresponding lines in the code document
 				const cmView = (editor as any).cm;
-				const state = cmView.state;
+				if (!cmView) return;
 
+				const state = cmView.state;
 				const head = state.selection.main.head;
 				const currentLine = state.doc.lineAt(head);
 
+				// Find the start of the table in the markdown text
 				let startLineNo = currentLine.number;
-				while (
-					startLineNo > 1 &&
-					state.doc.lineAt(state.doc.line(startLineNo - 1).from).text.includes("|")
-				) {
+				while (startLineNo > 1 && state.doc.line(startLineNo - 1).text.includes("|")) {
 					startLineNo--;
 				}
 
+				// Find the end of the table in the markdown text
 				let endLineNo = currentLine.number;
-				while (
-					endLineNo < state.doc.lines &&
-					state.doc.lineAt(state.doc.line(endLineNo + 1).from).text.includes("|")
-				) {
+				while (endLineNo < state.doc.lines && state.doc.line(endLineNo + 1).text.includes("|")) {
 					endLineNo++;
 				}
 
-				let tableRowIndex = 0; // Counter for the data rows in the markdown
+				let tableRowIndex = 0; // Counter for the actual markdown data rows
+				const changes: any[] = [];
 
-				cmView.dispatch({
-					changes: Array.from({ length: endLineNo - startLineNo + 1 }, (_, i) => {
-						const lineNo = startLineNo + i;
-						const line = state.doc.line(lineNo);
+				// 4. Transform the rows inside the markdown text
+				for (let lineNo = startLineNo; lineNo <= endLineNo; lineNo++) {
+					const line = state.doc.line(lineNo);
+					const text = line.text;
 
-						// Skip separator row
-						if (line.text.includes("---")) {
-							return null;
-						}
+					// Skip the separator row (|---|)
+					if (text.includes("---")) {
+						continue;
+					}
 
-						const currentTableLineIndex = tableRowIndex;
-						tableRowIndex++;
+					const currentTableLineIndex = tableRowIndex;
+					tableRowIndex++;
 
-						// Match against the corrected affected rows
-						if (affectedRows.includes(currentTableLineIndex)) {
-							const parts = line.text.split("|");
-							const hasLeading = line.text.trim().startsWith("|");
-							const arrayIndex = hasLeading ? targetColumn + 1 : targetColumn;
+					// If this markdown line matches one of the selected UI rows
+					if (affectedRows.includes(currentTableLineIndex)) {
+						const parts = text.split("|");
+						const hasLeading = text.trim().startsWith("|");
+						const arrayIndex = hasLeading ? targetColumn + 1 : targetColumn;
 
-							parts[arrayIndex] = ` ${fillValue} `;
+						// Overwrite the value in the target column
+						parts[arrayIndex] = ` ${fillValue} `;
 
-							return {
-								from: line.from,
-								to: line.to,
-								insert: parts.join("|"),
-							};
-						}
-						return null;
-					}).filter((x) => x !== null),
-				});
+						changes.push({
+							from: line.from,
+							to: line.to,
+							insert: parts.join("|"),
+						});
+					}
+				}
+
+				// 5. Dispatch changes atomically into CodeMirror
+				if (changes.length > 0) {
+					cmView.dispatch({ changes });
+				}
 			},
 		});
 
