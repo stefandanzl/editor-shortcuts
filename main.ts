@@ -786,6 +786,136 @@ export default class EditorShortcutsPlugin extends Plugin {
 			},
 		});
 
+		// Command to paste clipboard HTML as a ROUGH table draft.
+		// Only rule for now: consecutive <span> siblings are treated as one row,
+		// joined with ` | `. Everything else is emitted as its own line via text
+		// content. This is deliberately rough — run "Convert selection to table"
+		// afterwards to finish. The inserted draft is fully selected.
+		this.addCommand({
+			id: "paste-clipboard-as-rough-table",
+			name: "Paste clipboard as rough table draft",
+			icon: "clipboard-paste",
+			editorCallback: async (editor: Editor) => {
+				const logs: string[] = [];
+				const warnings: string[] = [];
+				const flushLogs = () => {
+					if (logs.length) console.log("[paste-rough-table]\n" + logs.join("\n"));
+					if (warnings.length) console.warn("[paste-rough-table] warnings:\n" + warnings.join("\n"));
+				};
+
+				// 1. Read clipboard. Prefer the HTML flavor.
+				let html: string | null = null;
+				let plain: string | null = null;
+
+				try {
+					// globalThis.require avoids a bare `require` (no node types loaded)
+					// and keeps esbuild from trying to bundle electron.
+					const electron: any = (globalThis as any).require?.("electron");
+					if (electron?.clipboard) {
+						html = electron.clipboard.readHTML() || null;
+						plain = electron.clipboard.readText() || null;
+						logs.push("clipboard read via electron");
+					}
+				} catch (e) {
+					warnings.push("electron clipboard unavailable, falling back to navigator API");
+				}
+
+				if (!html && !plain) {
+					try {
+						const items = await navigator.clipboard.read();
+						for (const item of items) {
+							if (!html && item.types.includes("text/html")) {
+								html = await (await item.getType("text/html")).text();
+							}
+							if (!plain && item.types.includes("text/plain")) {
+								plain = await (await item.getType("text/plain")).text();
+							}
+						}
+						logs.push("clipboard read via navigator.clipboard");
+					} catch (e) {
+						warnings.push("navigator.clipboard.read failed");
+					}
+				}
+
+				if (!html && !plain) {
+					flushLogs();
+					new Notice("Clipboard is empty or could not be read");
+					return;
+				}
+
+				// 2. Convert to rough rows.
+				// Walk the DOM: a run of consecutive <span> siblings becomes one row
+				// joined by ` | `; non-span elements are recursed into; stray text
+				// nodes become their own line. `<br>` and block boundaries flush the
+				// current span run.
+				const htmlToRoughRows = (htmlString: string): string[] => {
+					const doc = new DOMParser().parseFromString(htmlString, "text/html");
+					const rows: string[] = [];
+
+					const walk = (node: Node) => {
+						let spanRun: string[] = [];
+						const flush = () => {
+							if (spanRun.length) {
+								rows.push(spanRun.join(" | "));
+								spanRun = [];
+							}
+						};
+						for (const child of Array.from(node.childNodes)) {
+							if (child.nodeType === 1 && (child as HTMLElement).tagName === "SPAN") {
+								spanRun.push((child.textContent || "").trim());
+							} else if (child.nodeType === 1) {
+								flush();
+								walk(child);
+							} else if (child.nodeType === 3) {
+								// TEXT_NODE
+								const t = (child.textContent || "").trim();
+								if (t !== "") {
+									flush();
+									rows.push(t);
+								}
+							}
+						}
+						flush();
+					};
+
+					walk(doc.body);
+					return rows;
+				};
+
+				let lines: string[];
+				if (html) {
+					lines = htmlToRoughRows(html);
+					logs.push(`parsed HTML -> ${lines.length} raw row(s)`);
+				} else {
+					lines = plain!.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "");
+					logs.push(`no HTML flavor, used plain text -> ${lines.length} line(s)`);
+				}
+
+				if (lines.length === 0) {
+					flushLogs();
+					new Notice("Nothing convertible found in clipboard");
+					return;
+				}
+
+				// 3. Insert at cursor on its own block, then SELECT all of it.
+				const cursor = editor.getCursor();
+				const insertText = lines.join("\n");
+				const prefix = cursor.ch === 0 ? "" : "\n";
+				const suffix = "\n";
+
+				const startOffset = editor.posToOffset(cursor);
+				editor.replaceRange(prefix + insertText + suffix, cursor, cursor, "paste-rough-table");
+
+				// Selection covers exactly the inserted rows (not the padding newlines)
+				const selFrom = editor.offsetToPos(startOffset + prefix.length);
+				const selTo = editor.offsetToPos(startOffset + prefix.length + insertText.length);
+				editor.setSelection(selFrom, selTo);
+
+				logs.push(`inserted ${lines.length} row(s), selected`);
+				flushLogs();
+			},
+		});
+
 		// Command to paste image URL as markdown with filename as alt text
 		this.addCommand({
 			id: "embed-image-url",
