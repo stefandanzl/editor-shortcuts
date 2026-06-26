@@ -598,6 +598,194 @@ export default class EditorShortcutsPlugin extends Plugin {
 			},
 		});
 
+		// Command to convert a pipe-delimited selection into a markdown table.
+		// Conservative header rule: a header is only created when the line directly
+		// below the first row is a `---` separator. Otherwise the header row is left
+		// empty and every row becomes body (easy to delete later, hard to add later).
+		// Idempotent on already well-formed tables (standard spacing passes through).
+		this.addCommand({
+			id: "convert-to-table",
+			name: "Convert selection to table",
+			icon: "table-2",
+			editorCheckCallback: (checking: boolean, editor: Editor) => {
+				const from = editor.getCursor("from");
+				const to = editor.getCursor("to");
+				const hasSelection = from.line !== to.line || from.ch !== to.ch;
+
+				// First run — only show in the palette when something is selected
+				if (checking) {
+					return hasSelection;
+				}
+
+				if (!hasSelection) {
+					console.warn("[convert-to-table] aborted: no selection");
+					return;
+				}
+
+				// --- Tagged logger: accumulate diagnostics, flush once at the end ---
+				const logs: string[] = [];
+				const warnings: string[] = [];
+				const flushLogs = () => {
+					if (logs.length) console.log("[convert-to-table]\n" + logs.join("\n"));
+					if (warnings.length) console.warn("[convert-to-table] warnings:\n" + warnings.join("\n"));
+				};
+
+				const startLine = Math.min(from.line, to.line);
+				const endLine = Math.max(from.line, to.line);
+
+				// Step 1 — gather the selected lines
+				const rawLines: string[] = [];
+				for (let i = startLine; i <= endLine; i++) {
+					rawLines.push(editor.getLine(i));
+				}
+				logs.push(`input: ${rawLines.length} line(s), range ${startLine}-${endLine}`);
+
+				// Step 2 — drop blank / whitespace-only lines
+				const lines: string[] = [];
+				let droppedBlank = 0;
+				for (const l of rawLines) {
+					if (l.trim() === "") {
+						droppedBlank++;
+					} else {
+						lines.push(l);
+					}
+				}
+				if (droppedBlank > 0) logs.push(`dropped ${droppedBlank} blank line(s)`);
+
+				if (lines.length === 0) {
+					flushLogs();
+					new Notice("Nothing to convert — only empty lines");
+					return;
+				}
+
+				// Step 3 — per-line cell parsing.
+				// Strip ONE decorative leading `|` and ONE trailing `|`, then split on
+				// unescaped `|`. `\|` is a literal pipe inside a cell. `||` yields an
+				// intentional empty cell.
+				const isSeparatorCell = (c: string) => /^:?-+:?$/.test(c.trim());
+
+				const parseCells = (line: string): string[] => {
+					let s = line;
+					let leadingPipe = false;
+					let trailingPipe = false;
+					if (s.startsWith("|")) {
+						s = s.slice(1);
+						leadingPipe = true;
+					}
+					if (s.endsWith("|")) {
+						s = s.slice(0, -1);
+						trailingPipe = true;
+					}
+					if (leadingPipe || trailingPipe) {
+						logs.push(`edge pipe stripped (leading=${leadingPipe}, trailing=${trailingPipe}): "${line}"`);
+					}
+					// Split on `|` not preceded by `\` (keeps `\|` intact within a cell)
+					const parts = s.split(/(?<!\\)\|/);
+					let sawEscape = false;
+					const cells = parts.map((p) => {
+						if (p.includes("\\|")) sawEscape = true;
+						return p.replace(/\\\|/g, "|").trim();
+					});
+					if (sawEscape) logs.push(`escaped pipe (\\|) treated as literal in: "${line}"`);
+					return cells;
+				};
+
+				const isSeparatorLine = (line: string): boolean => {
+					const cells = parseCells(line);
+					return cells.length > 0 && cells.every(isSeparatorCell);
+				};
+
+				// Step 4 — separator detection & header decision.
+				// Drop separator-like lines that are NOT directly below the first row,
+				// so stray dashes never become a body cell.
+				const cleaned: string[] = [];
+				lines.forEach((l, idx) => {
+					if (idx !== 1 && isSeparatorLine(l)) {
+						warnings.push(`separator-like line dropped at index ${idx}: "${l}"`);
+						return;
+					}
+					cleaned.push(l);
+				});
+
+				const hasHeader = cleaned.length >= 2 && isSeparatorLine(cleaned[1]);
+				logs.push(`header detection: hasHeader=${hasHeader}`);
+
+				let headerCells: string[] | null;
+				let separatorSpec: string[] | null;
+				let bodyLines: string[];
+
+				if (hasHeader) {
+					headerCells = parseCells(cleaned[0]);
+					separatorSpec = parseCells(cleaned[1]).map((c) =>
+						isSeparatorCell(c) ? c.trim() : "---",
+					);
+					bodyLines = cleaned.slice(2);
+					logs.push(`header kept: ${JSON.stringify(headerCells)}`);
+				} else {
+					headerCells = null;
+					separatorSpec = null;
+					bodyLines = cleaned;
+					logs.push("no header marker -> empty header, all rows are body");
+				}
+
+				// Step 5 — determine shape. Column count comes from data rows only,
+				// NEVER from the separator row. Shorter rows are padded with empty cells.
+				let maxCols = headerCells ? headerCells.length : 0;
+				const bodyRows = bodyLines.map((l) => {
+					const cells = parseCells(l);
+					maxCols = Math.max(maxCols, cells.length);
+					return cells;
+				});
+				maxCols = Math.max(maxCols, 1);
+				logs.push(
+					`maxCols=${maxCols}; body cell counts: [${bodyRows.map((r) => r.length).join(", ")}]`,
+				);
+
+				const pad = (cells: string[]): string[] => {
+					const out = cells.slice();
+					while (out.length < maxCols) out.push("");
+					return out;
+				};
+
+				const headerRow = headerCells ? pad(headerCells) : Array.from({ length: maxCols }, () => "");
+				const bodyPadded = bodyRows.map(pad);
+
+				// Separator cells: preserve user alignment where given, else `---`.
+				const sepCells: string[] = [];
+				for (let i = 0; i < maxCols; i++) {
+					sepCells.push(separatorSpec && i < separatorSpec.length ? separatorSpec[i] : "---");
+				}
+				if (separatorSpec && separatorSpec.length !== maxCols) {
+					logs.push(`separator padded/trimmed: spec had ${separatorSpec.length}, maxCols=${maxCols}`);
+				}
+
+				// Step 6 — format and apply as a single transaction (one undo step)
+				const fmt = (cells: string[]) => "| " + cells.join(" | ") + " |";
+				const outRows: string[] = [fmt(headerRow), fmt(sepCells), ...bodyPadded.map(fmt)];
+				const table = outRows.join("\n");
+
+				logs.push(
+					`output: ${outRows.length} row(s) (header empty=${headerCells === null}, body ${bodyPadded.length})`,
+				);
+
+				editor.replaceRange(
+					table,
+					{ line: startLine, ch: 0 },
+					{ line: endLine, ch: editor.getLine(endLine).length },
+					"convert-table",
+				);
+
+				// Select the resulting table so the user can re-run / inspect easily
+				const newLineCount = table.split("\n").length - 1;
+				editor.setSelection(
+					{ line: startLine, ch: 0 },
+					{ line: startLine + newLineCount, ch: editor.getLine(startLine + newLineCount).length },
+				);
+
+				flushLogs();
+			},
+		});
+
 		// Command to paste image URL as markdown with filename as alt text
 		this.addCommand({
 			id: "embed-image-url",
