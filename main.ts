@@ -1,4 +1,4 @@
-import { Plugin, Editor, MarkdownView, Notice, EditorPosition } from "obsidian";
+import { Plugin, Editor, MarkdownView, Notice, EditorPosition, FuzzySuggestModal, App } from "obsidian";
 import { EditorView } from "@codemirror/view";
 import { syntaxTree } from "@codemirror/language";
 
@@ -45,6 +45,33 @@ const replacementExtension = EditorView.inputHandler.of((view, from, to, text) =
 	}
 	return false;
 });
+
+// Picker shown when the CSV delimiter can't be auto-detected confidently.
+// Uses Obsidian's built-in FuzzySuggestModal (type-to-filter, keyboard nav).
+type CsvDelimiterOption = { delim: string; label: string; cols: number; rows: number };
+
+class CsvDelimiterSuggestModal extends FuzzySuggestModal<CsvDelimiterOption> {
+	constructor(
+		app: App,
+		private options: CsvDelimiterOption[],
+		private onPick: (delim: string) => void,
+	) {
+		super(app);
+		this.setPlaceholder("Pick a CSV delimiter…");
+	}
+
+	getItems(): CsvDelimiterOption[] {
+		return this.options;
+	}
+
+	getItemText(item: CsvDelimiterOption): string {
+		return `${item.label}  →  ${item.cols} column${item.cols === 1 ? "" : "s"}, ${item.rows} row${item.rows === 1 ? "" : "s"}`;
+	}
+
+	onChooseItem(item: CsvDelimiterOption): void {
+		this.onPick(item.delim);
+	}
+}
 
 export default class EditorShortcutsPlugin extends Plugin {
 	async onload() {
@@ -913,6 +940,219 @@ export default class EditorShortcutsPlugin extends Plugin {
 
 				logs.push(`inserted ${lines.length} row(s), selected`);
 				flushLogs();
+			},
+		});
+
+		// Command to convert a CSV selection to a markdown table.
+		// Auto-detects the delimiter (comma / semicolon / tab) by column-count
+		// consistency; honors RFC-4180 quoting. Conservative empty header (no
+		// marker exists in CSV). When detection is ambiguous, a FuzzySuggestModal
+		// lets the user pick the delimiter manually.
+		this.addCommand({
+			id: "convert-csv-to-table",
+			name: "Convert CSV selection to table",
+			icon: "file-spreadsheet",
+			editorCheckCallback: (checking: boolean, editor: Editor) => {
+				const from = editor.getCursor("from");
+				const to = editor.getCursor("to");
+				const hasSelection = from.line !== to.line || from.ch !== to.ch;
+
+				if (checking) {
+					return hasSelection;
+				}
+
+				if (!hasSelection) {
+					console.warn("[convert-csv] aborted: no selection");
+					return;
+				}
+
+				const logs: string[] = [];
+				const warnings: string[] = [];
+				const flushLogs = () => {
+					if (logs.length) console.log("[convert-csv]\n" + logs.join("\n"));
+					if (warnings.length) console.warn("[convert-csv] warnings:\n" + warnings.join("\n"));
+				};
+
+				const startLine = Math.min(from.line, to.line);
+				const endLine = Math.max(from.line, to.line);
+
+				// Gather the selection as one string (quoted cells may span lines)
+				const rawLines: string[] = [];
+				for (let i = startLine; i <= endLine; i++) {
+					rawLines.push(editor.getLine(i));
+				}
+				const text = rawLines.join("\n");
+				logs.push(`input: ${rawLines.length} line(s)`);
+
+				// --- RFC-4180 CSV parser ---
+				const parseCsv = (input: string, delim: string): string[][] => {
+					const rows: string[][] = [];
+					let row: string[] = [];
+					let cell = "";
+					let inQuotes = false;
+					for (let i = 0; i < input.length; i++) {
+						const ch = input[i];
+						if (inQuotes) {
+							if (ch === '"') {
+								if (input[i + 1] === '"') {
+									cell += '"';
+									i++;
+								} else {
+									inQuotes = false;
+								}
+							} else {
+								cell += ch;
+							}
+						} else if (ch === '"') {
+							inQuotes = true;
+						} else if (ch === delim) {
+							row.push(cell);
+							cell = "";
+						} else if (ch === "\n") {
+							row.push(cell);
+							cell = "";
+							rows.push(row);
+							row = [];
+						} else if (ch !== "\r") {
+							cell += ch;
+						}
+					}
+					row.push(cell);
+					rows.push(row);
+					return rows;
+				};
+
+				// --- delimiter auto-detection ---
+				const candidateDefs = [
+					{ delim: ",", label: "Comma  ," },
+					{ delim: ";", label: "Semicolon  ;" },
+					{ delim: "\t", label: "Tab  ⇥" },
+					{ delim: "|", label: "Pipe  |" },
+				];
+
+				const analyze = (input: string, delim: string) => {
+					// Drop pure empty-line rows so a trailing newline can't skew the
+					// column-count stats (a common cause of misdetection on TSV/CSV).
+					const rows = parseCsv(input, delim).filter(
+						(r) => !(r.length === 1 && r[0] === ""),
+					);
+					const counts = rows.map((r) => r.length);
+					const freq: Record<number, number> = {};
+					for (const c of counts) freq[c] = (freq[c] || 0) + 1;
+					let modalCols = 0;
+					let modalFreq = 0;
+					for (const k in freq) {
+						if (freq[k] > modalFreq) {
+							modalFreq = freq[k];
+							modalCols = Number(k);
+						}
+					}
+					const consistency = counts.length ? modalFreq / counts.length : 0;
+					return { rows, modalCols, consistency };
+				};
+
+				const analyzed = candidateDefs.map((c) => ({ ...c, ...analyze(text, c.delim) }));
+				for (const a of analyzed) {
+					logs.push(
+						`candidate ${JSON.stringify(a.delim)}: modalCols=${a.modalCols}, consistency=${a.consistency.toFixed(2)}`,
+					);
+				}
+
+				// Strong-willed detection: a candidate "splits" if its most common
+				// row width is >= 2. If EXACTLY ONE candidate splits, trust it — a
+				// single ragged row no longer forces the picker. Only when several
+				// plausibly split (real ambiguity) do we ask the user.
+				const splitting = analyzed.filter((a) => a.modalCols >= 2);
+				const isConfident = splitting.length === 1;
+				const confidentPick = splitting[0];
+
+				// Sanitize a cell for markdown-table output: trim, escape literal
+				// pipes (`|` -> `\|`, which the pipe converter understands), and turn
+				// embedded newlines (from quoted multi-line cells) into `<br>`.
+				const sanitize = (c: string): string => {
+					let s = c.trim();
+					if (s.includes("\n")) {
+						warnings.push("cell contained newline -> converted to <br>");
+						s = s.replace(/\r?\n/g, "<br>");
+					}
+					if (s.includes("|")) {
+						warnings.push("cell contained pipe -> escaped to \\|");
+						s = s.replace(/\|/g, "\\|");
+					}
+					return s;
+				};
+
+				const buildAndApply = (delim: string, rowsRaw: string[][]) => {
+					logs.push(`using delimiter ${JSON.stringify(delim)}`);
+					const rows = rowsRaw
+						.map((r) => r.map(sanitize))
+						.filter((r) => !r.every((c) => c === ""));
+
+					if (rows.length === 0) {
+						flushLogs();
+						new Notice("Nothing to convert — only empty rows");
+						return;
+					}
+
+					let maxCols = 1;
+					for (const r of rows) maxCols = Math.max(maxCols, r.length);
+					logs.push(`output: ${rows.length} body row(s), maxCols=${maxCols}, empty header`);
+
+					const pad = (cells: string[]): string[] => {
+						const out = cells.slice();
+						while (out.length < maxCols) out.push("");
+						return out;
+					};
+					const headerRow = Array.from({ length: maxCols }, () => "");
+					const sepCells = Array.from({ length: maxCols }, () => "---");
+					const fmt = (cells: string[]) => "| " + cells.join(" | ") + " |";
+					const table = [fmt(headerRow), fmt(sepCells), ...rows.map((r) => fmt(pad(r)))].join("\n");
+
+					editor.replaceRange(
+						table,
+						{ line: startLine, ch: 0 },
+						{ line: endLine, ch: editor.getLine(endLine).length },
+						"convert-csv-table",
+					);
+
+					const newLineCount = table.split("\n").length - 1;
+					editor.setSelection(
+						{ line: startLine, ch: 0 },
+						{ line: startLine + newLineCount, ch: editor.getLine(startLine + newLineCount).length },
+					);
+					flushLogs();
+				};
+
+				if (isConfident && confidentPick) {
+					buildAndApply(confidentPick.delim, confidentPick.rows);
+				} else if (splitting.length === 0) {
+					// No delimiter splits the text at all -> single-column table.
+					logs.push("no delimiter split the text -> single-column table");
+					buildAndApply(",", analyzed[0].rows);
+				} else {
+					// Ambiguous / low confidence -> let the user pick the delimiter.
+					// Rank options by detected columns then consistency (best first).
+					logs.push(`not confident (splitting candidates: ${splitting.length}) -> opening delimiter picker`);
+					flushLogs();
+					logs.length = 0;
+					warnings.length = 0;
+					const ranked = [...analyzed].sort(
+						(a, b) => b.modalCols - a.modalCols || b.consistency - a.consistency,
+					);
+					new CsvDelimiterSuggestModal(
+						this.app,
+						ranked.map((a) => ({
+							delim: a.delim,
+							label: a.label,
+							cols: a.modalCols,
+							rows: a.rows.length,
+						})),
+						(chosen: string) => {
+							const pick = analyzed.find((a) => a.delim === chosen);
+							if (pick) buildAndApply(chosen, pick.rows);
+						},
+					).open();
+				}
 			},
 		});
 
