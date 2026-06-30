@@ -365,42 +365,84 @@ export async function registerTableCommands(plugin: EditorShortcutsPlugin) {
 				return;
 			}
 
-			// 2. Convert to rough rows.
-			// Walk the DOM: a run of consecutive <span> siblings becomes one row
-			// joined by ` | `; non-span elements are recursed into; stray text
-			// nodes become their own line. `<br>` and block boundaries flush the
-			// current span run.
+			// 2. Convert to rough rows by analyzing the DOM tree shape.
+			// For each container we look at its element children:
+			//  - all leaves                -> one row, the leaves are its cells
+			//  - all same-shape containers -> a list of records, each its own row
+			//  - anything else             -> one row, deep-flattened from all text
+			// A label leaf mixed with sub-blocks is folded into the row instead of
+			// being emitted as a standalone line.
 			const htmlToRoughRows = (htmlString: string): string[] => {
 				const doc = new DOMParser().parseFromString(htmlString, "text/html");
 				const rows: string[] = [];
 
-				const walk = (node: Node) => {
-					let spanRun: string[] = [];
-					const flush = () => {
-						if (spanRun.length) {
-							rows.push(spanRun.join(" | "));
-							spanRun = [];
-						}
-					};
-					for (const child of Array.from(node.childNodes)) {
-						if (child.nodeType === 1 && (child as HTMLElement).tagName === "SPAN") {
-							spanRun.push((child.textContent || "").trim());
-						} else if (child.nodeType === 1) {
-							flush();
-							walk(child);
-						} else if (child.nodeType === 3) {
-							// TEXT_NODE
-							const t = (child.textContent || "").trim();
-							if (t !== "") {
-								flush();
-								rows.push(t);
-							}
-						}
-					}
-					flush();
+				const elementChildren = (node: Node): HTMLElement[] =>
+					Array.from(node.childNodes).filter(
+						(c): c is HTMLElement => c.nodeType === 1,
+					);
+
+				const isLeaf = (el: HTMLElement): boolean => el.children.length === 0;
+
+				const cellText = (el: HTMLElement): string => (el.textContent || "").trim();
+
+				// Structural signature (tag + child shapes) used to tell a uniform
+				// list of same-shaped records from a heterogeneous record.
+				const shape = (el: HTMLElement): string => {
+					const kids = elementChildren(el);
+					if (kids.length === 0) return el.tagName;
+					return el.tagName + "[" + kids.map(shape).join(",") + "]";
 				};
 
-				walk(doc.body);
+				// Every non-whitespace text node under `node`, in document order —
+				// used to deep-flatten a heterogeneous/mixed block into one row.
+				const collectTexts = (node: Node): string[] => {
+					const out: string[] = [];
+					const walkText = (n: Node) => {
+						for (const c of n.childNodes) {
+							if (c.nodeType === 3) {
+								const t = (c.textContent || "").trim();
+								if (t) out.push(t);
+							} else if (c.nodeType === 1) {
+								walkText(c);
+							}
+						}
+					};
+					walkText(node);
+					return out;
+				};
+
+				const extract = (node: Node) => {
+					const kids = elementChildren(node);
+					if (kids.length === 0) return; // leaf — handled by its parent
+
+					const allLeaves = kids.every(isLeaf);
+					if (allLeaves) {
+						// all leaves -> one row, leaves are the cells
+						const cells = kids.map(cellText);
+						if (cells.some((c) => c !== "")) rows.push(cells.join(" | "));
+						return;
+					}
+
+					const allContainers = kids.every((c) => !isLeaf(c));
+					if (allContainers) {
+						const shapes = kids.map(shape);
+						if (shapes.every((s) => s === shapes[0])) {
+							// uniform record list -> each child becomes its own row
+							for (const c of kids) extract(c);
+						} else {
+							// heterogeneous record -> one row, deep-flattened
+							const cells = collectTexts(node);
+							if (cells.length) rows.push(cells.join(" | "));
+						}
+						return;
+					}
+
+					// mixed leaves + containers -> fold into one common row
+					const cells = collectTexts(node);
+					if (cells.length) rows.push(cells.join(" | "));
+				};
+
+				extract(doc.body);
 				return rows;
 			};
 
