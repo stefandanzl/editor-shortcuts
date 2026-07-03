@@ -448,6 +448,18 @@ export async function registerTableCommands(plugin: EditorShortcutsPlugin) {
 
 			let lines: string[];
 			if (html) {
+				if (/<table[\s>]/i.test(html)) {
+					// Native HTML table — let Obsidian convert it (like Ctrl/Cmd+V):
+					// dispatch a synthetic paste carrying the clipboard's HTML.
+					logs.push("native <table> -> Obsidian paste");
+					flushLogs();
+					const dt = new DataTransfer();
+					dt.setData("text/html", html);
+					(editor as any).cm?.contentDOM?.dispatchEvent(
+						new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }),
+					);
+					return;
+				}
 				lines = htmlToRoughRows(html);
 				logs.push(`parsed HTML -> ${lines.length} raw row(s)`);
 			} else {
