@@ -46,7 +46,7 @@ export async function registerTableCommands(plugin: EditorShortcutsPlugin) {
 			);
 
 			if (selectedCells.length < 2) {
-				new Notice("Please select at least two vertical cells!");
+				new Notice("Select cells in a single column (fill down) or a single row (fill right).");
 				return;
 			}
 
@@ -60,15 +60,29 @@ export async function registerTableCommands(plugin: EditorShortcutsPlugin) {
 				};
 			});
 
-			const fillValue = cellData[0].content;
-			const targetColumn = cellData[0].columnIndex;
-			const affectedRows = cellData.map((c) => c.rowIndex + 1);
+			// Direction: a single column of cells -> fill down; a single row -> fill right.
+			// A 2-D block (several rows AND several columns) is intentionally NOT handled.
+			const distinctColumns = new Set(cellData.map((c) => c.columnIndex)).size;
+			const distinctRows = new Set(cellData.map((c) => c.rowIndex)).size;
+			const fillDown = distinctColumns === 1 && distinctRows > 1;
+			const fillRight = distinctRows === 1 && distinctColumns > 1;
+
+			if (!fillDown && !fillRight) {
+				new Notice("Select cells in a single column (fill down) or a single row (fill right).");
+				return;
+			}
+
+			// Source value = topmost cell (fill down) or leftmost cell (fill right).
+			const source = cellData
+				.slice()
+				.sort((a, b) => (fillDown ? a.rowIndex - b.rowIndex : a.columnIndex - b.columnIndex))[0];
+			const fillValue = source.content;
 
 			const cmView = (editor as any).cm;
 			if (!cmView) return;
 
 			const state = cmView.state;
-			const initialSelection = state.selection; // Save the active table block selection range
+			const initialSelection = state.selection; // keep the table block selection active
 			const head = state.selection.main.head;
 			const currentLine = state.doc.lineAt(head);
 
@@ -82,37 +96,47 @@ export async function registerTableCommands(plugin: EditorShortcutsPlugin) {
 				endLineNo++;
 			}
 
+			// Replace cell `col` of a raw table line with `value`.
+			const setCell = (text: string, col: number, value: string): string => {
+				const parts = text.split("|");
+				const hasLeading = text.trim().startsWith("|");
+				const arrayIndex = hasLeading ? col + 1 : col;
+				parts[arrayIndex] = ` ${value} `;
+				return parts.join("|");
+			};
+
+			const affectedRows = new Set(cellData.map((c) => c.rowIndex + 1));
+			const affectedColumns = new Set(cellData.map((c) => c.columnIndex));
+			const targetRow = source.rowIndex + 1;
+
 			let tableRowIndex = 0;
 			const changes: any[] = [];
 
 			for (let lineNo = startLineNo; lineNo <= endLineNo; lineNo++) {
 				const line = state.doc.line(lineNo);
 				const text = line.text;
-
-				if (text.includes("---")) {
-					continue;
-				}
+				if (text.includes("---")) continue;
 
 				const currentTableLineIndex = tableRowIndex;
 				tableRowIndex++;
 
-				if (affectedRows.includes(currentTableLineIndex)) {
-					const parts = text.split("|");
-					const hasLeading = text.trim().startsWith("|");
-					const arrayIndex = hasLeading ? targetColumn + 1 : targetColumn;
+				let nextText: string | null = null;
+				if (fillDown && affectedRows.has(currentTableLineIndex)) {
+					nextText = setCell(text, source.columnIndex, fillValue);
+				} else if (fillRight && currentTableLineIndex === targetRow) {
+					let modified = text;
+					for (const col of affectedColumns) {
+						modified = setCell(modified, col, fillValue);
+					}
+					nextText = modified;
+				}
 
-					parts[arrayIndex] = ` ${fillValue} `;
-
-					changes.push({
-						from: line.from,
-						to: line.to,
-						insert: parts.join("|"),
-					});
+				if (nextText !== null) {
+					changes.push({ from: line.from, to: line.to, insert: nextText });
 				}
 			}
 
 			if (changes.length > 0) {
-				// Dispatch updates while passing back the initial selection so the grid remains active
 				cmView.dispatch({
 					changes,
 					selection: initialSelection,
