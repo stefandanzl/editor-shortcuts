@@ -441,15 +441,31 @@ export async function registerTableCommands(plugin: EditorShortcutsPlugin) {
 				// here as you encounter new pseudo-table layouts.
 				const CELL_TAGS = new Set(["DIV", "SPAN", "LI", "UL", "BR", "HR"]);
 
+				// A cell-worthy element that ALSO carries loose (direct, non-
+				// whitespace) text is flowing content with inline markup, not a row
+				// of cells — flatten it to one cell. So "1 Artikel x <span>9,12 €</span>"
+				// stays one cell, while a clean <span>label</span><span>value</span>
+				// row still splits (no loose text).
+				const hasLooseText = (el: HTMLElement): boolean => {
+					for (const c of Array.from(el.childNodes)) {
+						if (c.nodeType === 3 && (c.textContent || "").trim() !== "") return true;
+					}
+					return false;
+				};
+
 				// Deep-flatten a heterogeneous/mixed block into cells. Inline runs
 				// accumulate into one cell; cell-worthy children flush and become
-				// their own (br/hr just flush — no content of their own).
+				// their own — unless they have loose text, in which case they
+				// collapse to a single cell (br/hr just flush, no content of their own).
 				const collectCells = (node: Node): string[] => {
 					const out: string[] = [];
 					let buf = "";
-					const flush = () => {
-						const t = buf.replace(/\s+/g, " ").trim();
+					const push = (text: string) => {
+						const t = text.replace(/\s+/g, " ").trim();
 						if (t) out.push(t);
+					};
+					const flush = () => {
+						push(buf);
 						buf = "";
 					};
 					const walk = (n: Node) => {
@@ -460,7 +476,11 @@ export async function registerTableCommands(plugin: EditorShortcutsPlugin) {
 								const el = c as HTMLElement;
 								if (CELL_TAGS.has(el.tagName)) {
 									flush();
-									walk(el);
+									if (hasLooseText(el)) {
+										push(markdownText(el)); // flowing text -> one cell
+									} else {
+										walk(el); // clean row -> split into cells
+									}
 									flush();
 								} else {
 									buf += markdownText(el);
