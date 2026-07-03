@@ -383,7 +383,46 @@ export async function registerTableCommands(plugin: EditorShortcutsPlugin) {
 
 				const isLeaf = (el: HTMLElement): boolean => el.children.length === 0;
 
-				const cellText = (el: HTMLElement): string => (el.textContent || "").trim();
+				// Wrap a URL in <...> only if it contains a char that breaks bare
+				// markdown link syntax (space, ")", "<", ">"). Pure syntax — never
+				// alters URL characters, so no double-encoding risk.
+				const wrapUrl = (url: string): string =>
+					/[)\s<>]/.test(url) ? `<${url}>` : url;
+
+				// Placeholder for inline <svg> icons — their vector data isn't kept
+				// (only remote sources are ever referenced). Swap for an emoji freely.
+				const SVG_PLACEHOLDER = "svg";
+
+				// Recursive markdown for a node. Anchors -> [text](href), images ->
+				// ![alt](src), inline <svg> icons -> a placeholder, other elements
+				// pass through their children. So <a><img></a> -> [![alt](src)](href)
+				// and an icon-only link -> [svg](href) (a visible link).
+				const markdownText = (node: Node): string => {
+					if (node.nodeType === 3) {
+						return (node.textContent || "").replace(/\s+/g, " ");
+					}
+					if (node.nodeType !== 1) return "";
+					const el = node as HTMLElement;
+					const tag = el.tagName;
+					if (tag === "svg" || tag === "SVG") return SVG_PLACEHOLDER;
+					if (tag === "IMG") {
+						const src = el.getAttribute("src");
+						return src
+							? `![${(el.getAttribute("alt") || "").trim()}](${wrapUrl(src)})`
+							: "";
+					}
+					if (tag === "A") {
+						const inner = Array.from(el.childNodes)
+							.map(markdownText)
+							.join("")
+							.trim();
+						const href = el.getAttribute("href");
+						return href ? `[${inner}](${wrapUrl(href)})` : inner;
+					}
+					return Array.from(el.childNodes).map(markdownText).join("");
+				};
+
+				const cellText = (el: HTMLElement): string => markdownText(el).trim();
 
 				// Structural signature (tag + child shapes) used to tell a uniform
 				// list of same-shaped records from a heterogeneous record.
@@ -393,21 +432,44 @@ export async function registerTableCommands(plugin: EditorShortcutsPlugin) {
 					return el.tagName + "[" + kids.map(shape).join(",") + "]";
 				};
 
-				// Every non-whitespace text node under `node`, in document order —
-				// used to deep-flatten a heterogeneous/mixed block into one row.
-				const collectTexts = (node: Node): string[] => {
+				// HTML element names that represent a distinct pseudo-table cell
+				// (div, span, li, ul …). During deep-flatten they flush a cell
+				// boundary; br/hr are separators (flush without holding data).
+				// Table tags are intentionally absent — native <table> markup is
+				// delegated to Obsidian. Inline elements not listed here (a, img,
+				// strong, svg, …) accumulate into the surrounding cell. Add tags
+				// here as you encounter new pseudo-table layouts.
+				const CELL_TAGS = new Set(["DIV", "SPAN", "LI", "UL", "BR", "HR"]);
+
+				// Deep-flatten a heterogeneous/mixed block into cells. Inline runs
+				// accumulate into one cell; cell-worthy children flush and become
+				// their own (br/hr just flush — no content of their own).
+				const collectCells = (node: Node): string[] => {
 					const out: string[] = [];
-					const walkText = (n: Node) => {
-						for (const c of n.childNodes) {
+					let buf = "";
+					const flush = () => {
+						const t = buf.replace(/\s+/g, " ").trim();
+						if (t) out.push(t);
+						buf = "";
+					};
+					const walk = (n: Node) => {
+						for (const c of Array.from(n.childNodes)) {
 							if (c.nodeType === 3) {
-								const t = (c.textContent || "").trim();
-								if (t) out.push(t);
+								buf += (c.textContent || "").replace(/\s+/g, " ");
 							} else if (c.nodeType === 1) {
-								walkText(c);
+								const el = c as HTMLElement;
+								if (CELL_TAGS.has(el.tagName)) {
+									flush();
+									walk(el);
+									flush();
+								} else {
+									buf += markdownText(el);
+								}
 							}
 						}
 					};
-					walkText(node);
+					walk(node);
+					flush();
 					return out;
 				};
 
@@ -431,14 +493,14 @@ export async function registerTableCommands(plugin: EditorShortcutsPlugin) {
 							for (const c of kids) extract(c);
 						} else {
 							// heterogeneous record -> one row, deep-flattened
-							const cells = collectTexts(node);
+							const cells = collectCells(node);
 							if (cells.length) rows.push(cells.join(" | "));
 						}
 						return;
 					}
 
 					// mixed leaves + containers -> fold into one common row
-					const cells = collectTexts(node);
+					const cells = collectCells(node);
 					if (cells.length) rows.push(cells.join(" | "));
 				};
 
