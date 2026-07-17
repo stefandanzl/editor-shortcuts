@@ -28,6 +28,34 @@ class CsvDelimiterSuggestModal extends FuzzySuggestModal<CsvDelimiterOption> {
 	}
 }
 
+// Picker shown when a table-cell selection spans multiple rows AND columns,
+// so the user confirms the fill direction (or aborts). "Abort" is first so it
+// is the default — pressing Enter changes nothing, avoiding accidental damage.
+type FillOption = { label: string; value: "abort" | "down" | "right" };
+
+class FillDirectionSuggestModal extends FuzzySuggestModal<FillOption> {
+	constructor(app: App, private onPick: (value: FillOption["value"]) => void) {
+		super(app);
+		this.setPlaceholder("Selection spans several rows and columns — pick an action…");
+	}
+
+	getItems(): FillOption[] {
+		return [
+			{ label: "Abort (no change)", value: "abort" },
+			{ label: "Fill down — each column from its top cell", value: "down" },
+			{ label: "Fill right — each row from its left cell", value: "right" },
+		];
+	}
+
+	getItemText(item: FillOption): string {
+		return item.label;
+	}
+
+	onChooseItem(item: FillOption): void {
+		this.onPick(item.value);
+	}
+}
+
 export async function registerTableCommands(plugin: EditorShortcutsPlugin) {
 	// Command to fill selected vertical table cells (Excel-style behavior)
 	plugin.addCommand({
@@ -46,37 +74,30 @@ export async function registerTableCommands(plugin: EditorShortcutsPlugin) {
 			);
 
 			if (selectedCells.length < 2) {
-				new Notice("Select cells in a single column (fill down) or a single row (fill right).");
+				new Notice("Select at least two cells in one column (fill down) or one row (fill right).");
 				return;
 			}
 
+			// columnIndex / rowIndex are GLOBAL within the rendered <table>
+			// (header <tr> = row 0, body rows after) — so they map 1:1 to the raw
+			// source lines and a header cell can be used as a fill source too.
+			// (Header <th> cells do carry .is-selected, so they're captured; the
+			// old per-section rowIndex made a <th> collide with the first body <td>.)
 			const cellData = selectedCells.map((cell) => {
 				const parentRow = cell.closest("tr") as HTMLElement;
-				const allRows = Array.from(parentRow.parentElement!.children);
+				const table = parentRow.closest("table");
+				const allRows = table
+					? Array.from(table.querySelectorAll("tr"))
+					: Array.from(parentRow.parentElement!.children);
 				return {
 					columnIndex: Array.from(parentRow.children).indexOf(cell),
 					rowIndex: allRows.indexOf(parentRow),
-					content: cell.innerText?.trim() || "",
 				};
 			});
 
-			// Direction: a single column of cells -> fill down; a single row -> fill right.
-			// A 2-D block (several rows AND several columns) is intentionally NOT handled.
 			const distinctColumns = new Set(cellData.map((c) => c.columnIndex)).size;
 			const distinctRows = new Set(cellData.map((c) => c.rowIndex)).size;
-			const fillDown = distinctColumns === 1 && distinctRows > 1;
-			const fillRight = distinctRows === 1 && distinctColumns > 1;
-
-			if (!fillDown && !fillRight) {
-				new Notice("Select cells in a single column (fill down) or a single row (fill right).");
-				return;
-			}
-
-			// Source value = topmost cell (fill down) or leftmost cell (fill right).
-			const source = cellData
-				.slice()
-				.sort((a, b) => (fillDown ? a.rowIndex - b.rowIndex : a.columnIndex - b.columnIndex))[0];
-			const fillValue = source.content;
+			const is2d = distinctColumns > 1 && distinctRows > 1;
 
 			const cmView = (editor as any).cm;
 			if (!cmView) return;
@@ -90,59 +111,89 @@ export async function registerTableCommands(plugin: EditorShortcutsPlugin) {
 			while (startLineNo > 1 && state.doc.line(startLineNo - 1).text.includes("|")) {
 				startLineNo--;
 			}
-
 			let endLineNo = currentLine.number;
 			while (endLineNo < state.doc.lines && state.doc.line(endLineNo + 1).text.includes("|")) {
 				endLineNo++;
 			}
 
-			// Replace cell `col` of a raw table line with `value`.
+			// Map table-row-index -> raw source line. Values are read from the raw
+			// line (not the rendered DOM) so cells are copied VERBATIM — e.g. a
+			// `<br>` stays the text `<br>` instead of becoming a real newline that
+			// would split and break the table.
+			const lineByTableRow = new Map<number, { from: number; to: number; text: string }>();
+			let tri = 0;
+			for (let lineNo = startLineNo; lineNo <= endLineNo; lineNo++) {
+				const line = state.doc.line(lineNo);
+				if (line.text.includes("---")) continue;
+				lineByTableRow.set(tri, { from: line.from, to: line.to, text: line.text });
+				tri++;
+			}
+
+			const getCell = (text: string, col: number): string => {
+				const parts = text.split("|");
+				const i = text.trim().startsWith("|") ? col + 1 : col;
+				return (parts[i] ?? "").trim();
+			};
 			const setCell = (text: string, col: number, value: string): string => {
 				const parts = text.split("|");
-				const hasLeading = text.trim().startsWith("|");
-				const arrayIndex = hasLeading ? col + 1 : col;
-				parts[arrayIndex] = ` ${value} `;
+				const i = text.trim().startsWith("|") ? col + 1 : col;
+				parts[i] = ` ${value} `;
 				return parts.join("|");
 			};
 
-			const affectedRows = new Set(cellData.map((c) => c.rowIndex + 1));
-			const affectedColumns = new Set(cellData.map((c) => c.columnIndex));
-			const targetRow = source.rowIndex + 1;
+			// Fill down: per column, the top cell fills into the cells below it.
+			// Fill right: per row, the left cell fills into the cells to its right.
+			const applyFill = (mode: "down" | "right") => {
+				const groups = new Map<number, { columnIndex: number; rowIndex: number }[]>();
+				for (const cd of cellData) {
+					const key = mode === "down" ? cd.columnIndex : cd.rowIndex;
+					if (!groups.has(key)) groups.set(key, []);
+					groups.get(key)!.push(cd);
+				}
 
-			let tableRowIndex = 0;
-			const changes: any[] = [];
-
-			for (let lineNo = startLineNo; lineNo <= endLineNo; lineNo++) {
-				const line = state.doc.line(lineNo);
-				const text = line.text;
-				if (text.includes("---")) continue;
-
-				const currentTableLineIndex = tableRowIndex;
-				tableRowIndex++;
-
-				let nextText: string | null = null;
-				if (fillDown && affectedRows.has(currentTableLineIndex)) {
-					nextText = setCell(text, source.columnIndex, fillValue);
-				} else if (fillRight && currentTableLineIndex === targetRow) {
-					let modified = text;
-					for (const col of affectedColumns) {
-						modified = setCell(modified, col, fillValue);
+				// table-row-index -> (column -> verbatim value)
+				const replacements = new Map<number, Map<number, string>>();
+				for (const cells of groups.values()) {
+					cells.sort((a, b) =>
+						mode === "down" ? a.rowIndex - b.rowIndex : a.columnIndex - b.columnIndex,
+					);
+					const src = cells[0];
+					const srcLine = lineByTableRow.get(src.rowIndex);
+					if (!srcLine) continue;
+					const value = getCell(srcLine.text, src.columnIndex);
+					for (const c of cells) {
+						const row = c.rowIndex;
+						if (!replacements.has(row)) replacements.set(row, new Map());
+						replacements.get(row)!.set(c.columnIndex, value);
 					}
-					nextText = modified;
 				}
 
-				if (nextText !== null) {
-					changes.push({ from: line.from, to: line.to, insert: nextText });
+				const changes: any[] = [];
+				for (const [row, cols] of replacements) {
+					const line = lineByTableRow.get(row);
+					if (!line) continue;
+					let modified = line.text;
+					for (const [col, value] of cols) modified = setCell(modified, col, value);
+					changes.push({ from: line.from, to: line.to, insert: modified });
 				}
+				changes.sort((a, b) => a.from - b.from);
+				if (changes.length) {
+					cmView.dispatch({ changes, selection: initialSelection, userEvent: "input.type" });
+				}
+			};
+
+			if (!is2d) {
+				// clean single column (down) or single row (right) -> fill directly
+				applyFill(distinctColumns === 1 ? "down" : "right");
+				return;
 			}
 
-			if (changes.length > 0) {
-				cmView.dispatch({
-					changes,
-					selection: initialSelection,
-					userEvent: "input.type",
-				});
-			}
+			// 2-D block: confirm intent. Default ("Abort", first item) changes nothing.
+			new FillDirectionSuggestModal(plugin.app, (choice) => {
+				if (choice === "abort") return;
+				// defer past the modal's close/teardown before mutating the editor
+				setTimeout(() => applyFill(choice), 0);
+			}).open();
 		},
 	});
 
