@@ -1,60 +1,6 @@
-import { App, Editor, FuzzySuggestModal, MarkdownView, Notice } from "obsidian";
+import { Editor, MarkdownView, Notice } from "obsidian";
 import EditorShortcutsPlugin from "./main";
-
-// Picker shown when the CSV delimiter can't be auto-detected confidently.
-// Uses Obsidian's built-in FuzzySuggestModal (type-to-filter, keyboard nav).
-type CsvDelimiterOption = { delim: string; label: string; cols: number; rows: number };
-
-class CsvDelimiterSuggestModal extends FuzzySuggestModal<CsvDelimiterOption> {
-	constructor(
-		app: App,
-		private options: CsvDelimiterOption[],
-		private onPick: (delim: string) => void,
-	) {
-		super(app);
-		this.setPlaceholder("Pick a CSV delimiter…");
-	}
-
-	getItems(): CsvDelimiterOption[] {
-		return this.options;
-	}
-
-	getItemText(item: CsvDelimiterOption): string {
-		return `${item.label}  →  ${item.cols} column${item.cols === 1 ? "" : "s"}, ${item.rows} row${item.rows === 1 ? "" : "s"}`;
-	}
-
-	onChooseItem(item: CsvDelimiterOption): void {
-		this.onPick(item.delim);
-	}
-}
-
-// Picker shown when a table-cell selection spans multiple rows AND columns,
-// so the user confirms the fill direction (or aborts). "Abort" is first so it
-// is the default — pressing Enter changes nothing, avoiding accidental damage.
-type FillOption = { label: string; value: "abort" | "down" | "right" };
-
-class FillDirectionSuggestModal extends FuzzySuggestModal<FillOption> {
-	constructor(app: App, private onPick: (value: FillOption["value"]) => void) {
-		super(app);
-		this.setPlaceholder("Selection spans several rows and columns — pick an action…");
-	}
-
-	getItems(): FillOption[] {
-		return [
-			{ label: "Abort (no change)", value: "abort" },
-			{ label: "Fill down — each column from its top cell", value: "down" },
-			{ label: "Fill right — each row from its left cell", value: "right" },
-		];
-	}
-
-	getItemText(item: FillOption): string {
-		return item.label;
-	}
-
-	onChooseItem(item: FillOption): void {
-		this.onPick(item.value);
-	}
-}
+import { CsvDelimiterSuggestModal, FillDirectionSuggestModal } from "./ui";
 
 export async function registerTableCommands(plugin: EditorShortcutsPlugin) {
 	// Command to fill selected vertical table cells (Excel-style behavior)
@@ -452,17 +398,14 @@ export async function registerTableCommands(plugin: EditorShortcutsPlugin) {
 				const rows: string[] = [];
 
 				const elementChildren = (node: Node): HTMLElement[] =>
-					Array.from(node.childNodes).filter(
-						(c): c is HTMLElement => c.nodeType === 1,
-					);
+					Array.from(node.childNodes).filter((c): c is HTMLElement => c.nodeType === 1);
 
 				const isLeaf = (el: HTMLElement): boolean => el.children.length === 0;
 
 				// Wrap a URL in <...> only if it contains a char that breaks bare
 				// markdown link syntax (space, ")", "<", ">"). Pure syntax — never
 				// alters URL characters, so no double-encoding risk.
-				const wrapUrl = (url: string): string =>
-					/[)\s<>]/.test(url) ? `<${url}>` : url;
+				const wrapUrl = (url: string): string => (/[)\s<>]/.test(url) ? `<${url}>` : url);
 
 				// Placeholder for inline <svg> icons — their vector data isn't kept
 				// (only remote sources are ever referenced). Swap for an emoji freely.
@@ -482,15 +425,10 @@ export async function registerTableCommands(plugin: EditorShortcutsPlugin) {
 					if (tag === "svg" || tag === "SVG") return SVG_PLACEHOLDER;
 					if (tag === "IMG") {
 						const src = el.getAttribute("src");
-						return src
-							? `![${(el.getAttribute("alt") || "").trim()}](${wrapUrl(src)})`
-							: "";
+						return src ? `![${(el.getAttribute("alt") || "").trim()}](${wrapUrl(src)})` : "";
 					}
 					if (tag === "A") {
-						const inner = Array.from(el.childNodes)
-							.map(markdownText)
-							.join("")
-							.trim();
+						const inner = Array.from(el.childNodes).map(markdownText).join("").trim();
 						const href = el.getAttribute("href");
 						return href ? `[${inner}](${wrapUrl(href)})` : inner;
 					}

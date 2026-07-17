@@ -2,7 +2,87 @@ import { Editor } from "obsidian";
 import EditorShortcutsPlugin from "./main";
 import { getSelectedLineRange } from "./utils";
 
+// Move the current line (or the whole selected line block) one line up or
+// down. Shared by the move-line-up / move-line-down commands.
+function moveLine(editor: Editor, dir: "up" | "down") {
+	const { hasMultiLineSelection, startLine, endLine } = getSelectedLineRange(editor);
+	const lastLine = editor.lineCount() - 1;
+
+	if (hasMultiLineSelection) {
+		if ((dir === "up" && startLine === 0) || (dir === "down" && endLine === lastLine)) return;
+
+		const selectedLines: string[] = [];
+		for (let i = startLine; i <= endLine; i++) selectedLines.push(editor.getLine(i));
+
+		const replaceFrom = dir === "up" ? startLine - 1 : startLine;
+		const replaceTo = dir === "up" ? endLine : endLine + 1;
+		const neighbor = editor.getLine(dir === "up" ? startLine - 1 : endLine + 1);
+		const newContent =
+			dir === "up"
+				? selectedLines.join("\n") + "\n" + neighbor
+				: neighbor + "\n" + selectedLines.join("\n");
+
+		editor.replaceRange(
+			newContent,
+			{ line: replaceFrom, ch: 0 },
+			{ line: replaceTo, ch: editor.getLine(replaceTo).length },
+			"move-line",
+		);
+
+		const shift = dir === "up" ? -1 : 1;
+		editor.setSelection(
+			{ line: startLine + shift, ch: 0 },
+			{ line: endLine + shift, ch: editor.getLine(endLine + shift).length },
+		);
+		return;
+	}
+
+	// single line: swap text with the neighbour, move the cursor along
+	const cursor = editor.getCursor();
+	const line = cursor.line;
+	if ((dir === "up" && line === 0) || (dir === "down" && line === lastLine)) return;
+	const swapWith = dir === "up" ? line - 1 : line + 1;
+	const cur = editor.getLine(line);
+	const other = editor.getLine(swapWith);
+	editor.replaceRange(other, { line, ch: 0 }, { line, ch: editor.getLine(line).length }, "move-line");
+	editor.replaceRange(
+		cur,
+		{ line: swapWith, ch: 0 },
+		{ line: swapWith, ch: editor.getLine(swapWith).length },
+		"move-line",
+	);
+	editor.setCursor({ line: swapWith, ch: cursor.ch });
+}
+
 export async function registerFormatCommands(plugin: EditorShortcutsPlugin) {
+	// Command to move the current line up
+	plugin.addCommand({
+		id: "move-line-up",
+		name: "Move current line up",
+		icon: "arrow-up-from-line",
+		hotkeys: [
+			{
+				modifiers: ["Alt"],
+				key: "ArrowUp",
+			},
+		],
+		editorCallback: (editor: Editor) => moveLine(editor, "up"),
+	});
+
+	// Command to move the current line down
+	plugin.addCommand({
+		id: "move-line-down",
+		name: "Move current line down",
+		icon: "arrow-down-from-line",
+		hotkeys: [
+			{
+				modifiers: ["Alt"],
+				key: "ArrowDown",
+			},
+		],
+		editorCallback: (editor: Editor) => moveLine(editor, "down"),
+	});
+
 	plugin.addCommand({
 		id: "duplicate-line",
 		name: "Duplicate current line or selection",
@@ -120,162 +200,6 @@ export async function registerFormatCommands(plugin: EditorShortcutsPlugin) {
 				// Delete the new line character
 				if (line < editor.lineCount() - 1) {
 					editor.replaceRange("", { line: line, ch: 0 }, { line: line + 1, ch: 0 }, "delete-line");
-				}
-			}
-		},
-	});
-
-	// Command to move the current line up
-	plugin.addCommand({
-		id: "move-line-up",
-		name: "Move current line up",
-		icon: "arrow-up-from-line",
-		hotkeys: [
-			{
-				modifiers: ["Alt"],
-				key: "ArrowUp",
-			},
-		],
-		editorCallback: (editor: Editor) => {
-			const { hasMultiLineSelection, startLine, endLine } = getSelectedLineRange(editor);
-
-			if (hasMultiLineSelection) {
-				// Move multiple lines up
-				if (startLine === 0) return; // Can't move up from first line
-
-				// Extract the line above the selection
-				const lineAbove = editor.getLine(startLine - 1);
-
-				// Extract all selected lines
-				const selectedLines: string[] = [];
-				for (let i = startLine; i <= endLine; i++) {
-					selectedLines.push(editor.getLine(i));
-				}
-
-				// Replace the range: selected lines, then line above
-				const newContent = selectedLines.join("\n") + "\n" + lineAbove;
-				editor.replaceRange(
-					newContent,
-					{ line: startLine - 1, ch: 0 },
-					{ line: endLine, ch: editor.getLine(endLine).length },
-					"move-line",
-				);
-
-				// Restore selection, shifted up by 1
-				editor.setSelection(
-					{ line: startLine - 1, ch: 0 },
-					{
-						line: endLine - 1,
-						ch: editor.getLine(endLine - 1).length,
-					},
-				);
-			} else {
-				// Single line move (original logic)
-				const cursor = editor.getCursor();
-				const line = cursor.line;
-
-				if (line > 0) {
-					const currentLineText = editor.getLine(line);
-					const prevLineText = editor.getLine(line - 1);
-
-					// Replace the previous line with the current line
-					editor.replaceRange(
-						currentLineText,
-						{ line: line - 1, ch: 0 },
-						{ line: line - 1, ch: prevLineText.length },
-						"move-line",
-					);
-
-					// Replace the current line with the previous line
-					editor.replaceRange(
-						prevLineText,
-						{ line: line, ch: 0 },
-						{ line: line, ch: currentLineText.length },
-						"move-line",
-					);
-
-					// Move the cursor up a line while maintaining the same column position
-					editor.setCursor({ line: line - 1, ch: cursor.ch });
-				}
-			}
-		},
-	});
-
-	// Command to move the current line down
-	plugin.addCommand({
-		id: "move-line-down",
-		name: "Move current line down",
-		icon: "arrow-down-from-line",
-		hotkeys: [
-			{
-				modifiers: ["Alt"],
-				key: "ArrowDown",
-			},
-		],
-		editorCallback: (editor: Editor) => {
-			const { hasMultiLineSelection, startLine, endLine } = getSelectedLineRange(editor);
-
-			if (hasMultiLineSelection) {
-				// Move multiple lines down
-				const lastLine = editor.lineCount() - 1;
-				if (endLine === lastLine) return; // Can't move down from last line
-
-				// Extract all selected lines
-				const selectedLines: string[] = [];
-				for (let i = startLine; i <= endLine; i++) {
-					selectedLines.push(editor.getLine(i));
-				}
-
-				// Extract the line below the selection
-				const lineBelow = editor.getLine(endLine + 1);
-
-				// Replace the range: line below, then selected lines
-				const newContent = lineBelow + "\n" + selectedLines.join("\n");
-				editor.replaceRange(
-					newContent,
-					{ line: startLine, ch: 0 },
-					{
-						line: endLine + 1,
-						ch: editor.getLine(endLine + 1).length,
-					},
-					"move-line",
-				);
-
-				// Restore selection, shifted down by 1
-				editor.setSelection(
-					{ line: startLine + 1, ch: 0 },
-					{
-						line: endLine + 1,
-						ch: editor.getLine(endLine + 1).length,
-					},
-				);
-			} else {
-				// Single line move (original logic)
-				const cursor = editor.getCursor();
-				const line = cursor.line;
-
-				if (line < editor.lineCount() - 1) {
-					const currentLineText = editor.getLine(line);
-					const nextLineText = editor.getLine(line + 1);
-
-					// Replace the next line with the current line
-					editor.replaceRange(
-						currentLineText,
-						{ line: line + 1, ch: 0 },
-						{ line: line + 1, ch: nextLineText.length },
-						"move-line",
-					);
-
-					// Replace the current line with the next line
-					editor.replaceRange(
-						nextLineText,
-						{ line: line, ch: 0 },
-						{ line: line, ch: currentLineText.length },
-						"move-line",
-					);
-
-					// Move the cursor down a line while maintaining the same column position
-					editor.setCursor({ line: line + 1, ch: cursor.ch });
 				}
 			}
 		},

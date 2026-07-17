@@ -1,9 +1,10 @@
-import { Plugin, Editor, MarkdownView, Notice, EditorPosition, FuzzySuggestModal, App } from "obsidian";
+import { Plugin, Editor, Notice, TFile } from "obsidian";
 import { EditorView } from "@codemirror/view";
 import { syntaxTree } from "@codemirror/language";
 import { registerTableCommands } from "./table";
 import { registerFormatCommands } from "./format";
 import { getSelectedLineRange } from "./utils";
+import { FilePropertiesModal } from "./ui";
 
 const REPLACEMENTS = [
 	{ trigger: "-->", replacement: "\u{27F6}" },
@@ -55,6 +56,17 @@ export default class EditorShortcutsPlugin extends Plugin {
 		this.registerEditorExtension(replacementExtension);
 		registerTableCommands(this);
 		registerFormatCommands(this);
+
+		this.registerEvent(
+			this.app.workspace.on("file-menu", (menu, file) => {
+				if (!(file instanceof TFile)) return; // folders have no file stats
+				menu.addItem((item) => {
+					item.setTitle("Show note file properties")
+						.setIcon("info")
+						.onClick(() => new FilePropertiesModal(this.app, file).open());
+				});
+			}),
+		);
 
 		// Command to toggle both sidebars
 		this.addCommand({
