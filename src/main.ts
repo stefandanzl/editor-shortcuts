@@ -129,6 +129,30 @@ export default class EditorShortcutsPlugin extends Plugin {
 			},
 		});
 
+		// Simulate Shift+Enter — for mobile, where the on-screen keyboard can't
+		// send it. Dispatches a synthetic keydown so Obsidian's own soft-break /
+		// list-indent handling runs (e.g. continuing a checkbox item on an
+		// indented line). No default hotkey (bind it / use the palette on mobile).
+		this.addCommand({
+			id: "simulate-shift-enter",
+			name: "Simulate Shift+Enter",
+			icon: "corner-down-right",
+			editorCallback: (editor) => {
+				const target = (editor as any).cm?.contentDOM as HTMLElement | undefined;
+				if (!target) return;
+				target.dispatchEvent(
+					new KeyboardEvent("keydown", {
+						key: "Enter",
+						code: "Enter",
+						keyCode: 13,
+						shiftKey: true,
+						bubbles: true,
+						cancelable: true,
+					}),
+				);
+			},
+		});
+
 		// Command to paste image URL as markdown with filename as alt text
 		this.addCommand({
 			id: "embed-image-url",
