@@ -111,6 +111,24 @@ export default class EditorShortcutsPlugin extends Plugin {
 			},
 		});
 
+		// Trigger Obsidian's editor autocomplete (tags, file links, …) — like
+		// Ctrl+Space in VS Code. Reaches into a private API; fails silently.
+		this.addCommand({
+			id: "trigger-suggestion",
+			name: "Trigger autocomplete suggestion",
+			icon: "text-cursor-input",
+			hotkeys: [{ modifiers: ["Ctrl"], key: " " }],
+			editorCallback: (editor, view) => {
+				const suggest = (this.app.workspace as any).editorSuggest;
+				if (!suggest || typeof suggest.trigger !== "function") return;
+				try {
+					suggest.trigger(editor, view.file, true);
+				} catch {
+					/* fail silently */
+				}
+			},
+		});
+
 		// Command to paste image URL as markdown with filename as alt text
 		this.addCommand({
 			id: "embed-image-url",
