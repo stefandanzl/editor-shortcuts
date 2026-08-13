@@ -130,26 +130,35 @@ export default class EditorShortcutsPlugin extends Plugin {
 		});
 
 		// Simulate Shift+Enter — for mobile, where the on-screen keyboard can't
-		// send it. Dispatches a synthetic keydown so Obsidian's own soft-break /
-		// list-indent handling runs (e.g. continuing a checkbox item on an
-		// indented line). No default hotkey (bind it / use the palette on mobile).
+		// send it. Context-aware: <br> inside a table, indented continuation for
+		// list/checkbox/numbered items, else keep the line's leading indent.
 		this.addCommand({
 			id: "simulate-shift-enter",
 			name: "Simulate Shift+Enter",
 			icon: "corner-down-right",
 			editorCallback: (editor) => {
-				const target = (editor as any).cm?.contentDOM as HTMLElement | undefined;
-				if (!target) return;
-				target.dispatchEvent(
-					new KeyboardEvent("keydown", {
-						key: "Enter",
-						code: "Enter",
-						keyCode: 13,
-						shiftKey: true,
-						bubbles: true,
-						cancelable: true,
-					}),
-				);
+				const lineText = editor.getLine(editor.getCursor().line);
+
+				// Table context: <br> so we don't break the markdown table.
+				const isTable =
+					lineText.trim().startsWith("|") ||
+					(lineText.includes("|") && lineText.trim().endsWith("|"));
+				if (isTable) {
+					const from = editor.getCursor("from");
+					editor.replaceSelection("<br>");
+					editor.setCursor({ line: from.line, ch: from.ch + 4 }); // land after <br>
+					return;
+				}
+
+				// List / checkbox: indent to the item's content position.
+				const listMatch = lineText.match(/^(\s*(?:[-+*]|\d+\.)\s*(?:\[[ xX]\]\s*)?)/);
+				if (listMatch) {
+					editor.replaceSelection("\n" + " ".repeat(listMatch[1].length));
+					return;
+				}
+
+				// Plain text: keep the current line's leading indent.
+				editor.replaceSelection("\n" + (lineText.match(/^\s*/)?.[0] ?? ""));
 			},
 		});
 
