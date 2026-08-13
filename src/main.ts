@@ -137,23 +137,47 @@ export default class EditorShortcutsPlugin extends Plugin {
 			name: "Simulate Shift+Enter",
 			icon: "corner-down-right",
 			editorCallback: (editor) => {
+				// Rendered table widget: the cell is its own CodeMirror editor, so
+				// edit THAT one. Editing the main source while a cell is open
+				// desyncs the two docs ("wrong length" errors) and leaves <br> as
+				// literal text. A newline in the cell editor renders as a line break
+				// and the widget writes <br> to source — native, no refresh needed.
+				const cellEl = (document.activeElement as HTMLElement | null)?.closest(
+					".cm-table-widget .cm-editor",
+				) as HTMLElement | null;
+				if (cellEl) {
+					const view = EditorView.findFromDOM(cellEl);
+					if (view) {
+						view.dispatch(view.state.replaceSelection("\n"));
+						view.focus();
+						return;
+					}
+				}
+
+				// Source mode below.
 				const lineText = editor.getLine(editor.getCursor().line);
 
-				// Table context: <br> so we don't break the markdown table.
+				// Table row in source: <br> so the row isn't split.
 				const isTable =
 					lineText.trim().startsWith("|") ||
 					(lineText.includes("|") && lineText.trim().endsWith("|"));
 				if (isTable) {
 					const from = editor.getCursor("from");
 					editor.replaceSelection("<br>");
-					editor.setCursor({ line: from.line, ch: from.ch + 4 }); // land after <br>
+					editor.setCursor({ line: from.line, ch: from.ch + 4 }); // after <br>
 					return;
 				}
 
-				// List / checkbox: indent to the item's content position.
+				// List / checkbox: indent to the item's content position. Keep the
+				// leading whitespace VERBATIM (tabs or spaces, however many) and pad
+				// only the marker width with spaces.
 				const listMatch = lineText.match(/^(\s*(?:[-+*]|\d+\.)\s*(?:\[[ xX]\]\s*)?)/);
 				if (listMatch) {
-					editor.replaceSelection("\n" + " ".repeat(listMatch[1].length));
+					const prefix = listMatch[1];
+					const leadingWs = /^\s*/.exec(prefix)?.[0] ?? "";
+					editor.replaceSelection(
+						"\n" + leadingWs + " ".repeat(prefix.length - leadingWs.length),
+					);
 					return;
 				}
 
