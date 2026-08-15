@@ -60,6 +60,7 @@ export async function registerFormatCommands(plugin: EditorShortcutsPlugin) {
 		id: "move-line-up",
 		name: "Move current line up",
 		icon: "arrow-up-from-line",
+		repeatable: true,
 		hotkeys: [
 			{
 				modifiers: ["Alt"],
@@ -74,6 +75,7 @@ export async function registerFormatCommands(plugin: EditorShortcutsPlugin) {
 		id: "move-line-down",
 		name: "Move current line down",
 		icon: "arrow-down-from-line",
+		repeatable: true,
 		hotkeys: [
 			{
 				modifiers: ["Alt"],
@@ -253,7 +255,7 @@ export async function registerFormatCommands(plugin: EditorShortcutsPlugin) {
 
 	plugin.addCommand({
 		id: "cycle-bullet-style",
-		name: "Cycle bullet style (Selection-aware)",
+		name: "Cycle bullet style",
 		icon: "list-bullets",
 		editorCallback: (editor: Editor) => {
 			const from = editor.getCursor("from");
