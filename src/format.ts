@@ -271,7 +271,7 @@ export async function registerFormatCommands(plugin: EditorShortcutsPlugin) {
 			if (firstLineMatch) {
 				const [, , marker] = firstLineMatch;
 				const content = firstLine.slice(firstLineMatch[0].length);
-				const isCheckbox = content.match(/^\[[ x]\]\s*/);
+				const isCheckbox = content.match(/^\[.\]\s*/);
 
 				if (isCheckbox) {
 					targetMarker = "-"; // Reset checklist back to normal bullet
@@ -306,7 +306,7 @@ export async function registerFormatCommands(plugin: EditorShortcutsPlugin) {
 					indentLen = indent.length;
 					oldPrefixLen = indent.length;
 					if (targetMarker !== "none") {
-						const content = line.trim();
+						const content = line.slice(indent.length);
 						newLine = content
 							? `${indent}${targetMarker} ${content}`
 							: `${indent}${targetMarker} `;
@@ -322,7 +322,7 @@ export async function registerFormatCommands(plugin: EditorShortcutsPlugin) {
 					let content = line.slice(match[0].length);
 
 					// Strip checkboxes if we hit them
-					const checkboxMatch = content.match(/^(\[[ x]\]\s*)(.*)/s);
+					const checkboxMatch = content.match(/^(\[.\]\s*)(.*)/s);
 					let checkboxLen = 0;
 					if (checkboxMatch) {
 						content = checkboxMatch[2];
