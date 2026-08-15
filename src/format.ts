@@ -232,8 +232,14 @@ export async function registerFormatCommands(plugin: EditorShortcutsPlugin) {
 				selectedLines.push(editor.getLine(i));
 			}
 
-			let processedText = selectedLines.join("\n").replace(/\n[ \t]*\n(?!#|---)/g, "\n");
-			processedText = processedText.replace(/\n\n[ \t]*---[ \t]*\n/g, "\n\n");
+			let processedText = selectedLines
+				.join("\n")
+				.replace(/(?<!\|[^\n]*)\n[ \t]*\n(?!#|---|[ \t]*\|)/g, "\n");
+
+			// Set either "\n\n---\n\n" or "\n\n"
+			// to either keep separator lines or remove them
+			const separatorReplace = "\n\n---\n\n";
+			processedText = processedText.replace(/\n\n[ \t]*---[ \t]*\n/g, separatorReplace);
 
 			// Replace the selected text with the processed text
 			editor.replaceRange(
@@ -353,7 +359,11 @@ export async function registerFormatCommands(plugin: EditorShortcutsPlugin) {
 			const mapCh = (line: number, ch: number): number => {
 				const idx = line - startLine;
 				const indentLen = indentLens[idx] ?? 0;
-				let newCh = ch <= indentLen ? ch : ch + (deltas[idx] ?? 0);
+				const delta = deltas[idx] ?? 0;
+				// delta > 0 only when a marker was added to a no-bullet line: jump
+				// the caret past it (so an empty line -> "- |") instead of leaving
+				// it sitting in the indent.
+				let newCh = ch <= indentLen ? (delta > 0 ? indentLen + delta : ch) : ch + delta;
 				const len = newLines[idx]?.length ?? 0;
 				if (newCh < 0) newCh = 0;
 				if (newCh > len) newCh = len;
