@@ -1,8 +1,97 @@
-/*
+@page {
+	margin-top: 1.5cm;
+	margin-bottom: 1.5cm;
+	margin-left: 2.5cm;
+	margin-right: 2.5cm;
+	@bottom-center {
+		content: counter(page) " / " counter(pages);
+		font-size: 12px;
+		color: #666;
+	}
+}
 
-This CSS file will be included with your plugin, and
-available in the app when your plugin is enabled.
+@media print {
+	html,
+	body,
+	.markdown-reading-view,
+	.markdown-preview-view,
+	.markdown-preview-sizer {
+		display: block !important;
+		visibility: visible !important;
+		height: auto !important;
+		overflow: visible !important;
+		position: static !important;
+		font-family: "Inter", "Helvetica Neue", Arial, sans-serif !important;
+	}
 
-If your plugin does not need CSS, delete this file.
+	body.print {
+		background-color: #ffffff !important;
+		color: #111111 !important;
+		font-size: 11pt !important;
+		line-height: 1.5 !important;
+	}
 
-*/
+	/* Remove ugly page breaks */
+	body.print h1,
+	body.print h2,
+	body.print h3,
+	body.print h4,
+	body.print h5,
+	body.print h6 {
+		page-break-after: avoid !important;
+		break-after: avoid !important;
+		color: #111111 !important;
+	}
+
+	body.print pre,
+	body.print code,
+	body.print table,
+	body.print blockquote,
+	body.print img {
+		break-inside: avoid !important;
+	}
+
+	/* 3. Force Obsidian-Container to full width */
+	body.print .markdown-rendered,
+	body.print .markdown-preview-view,
+	body.print .markdown-preview-sizer {
+		width: 100% !important;
+		max-width: 100% !important;
+		padding: 0 !important;
+		margin: 0 !important;
+	}
+
+	body.print a[href^="http"]:after {
+		content: " (" attr(href) ")";
+	}
+
+	body.print pre {
+		background-color: transparent !important;
+		border: 1px solid #666;
+	}
+
+	body.print p {
+		orphans: 3;
+		widows: 3;
+	}
+
+	body.print table {
+		border-collapse: collapse !important;
+		width: 100% !important;
+	}
+
+	body.print tr {
+		page-break-inside: avoid !important;
+		break-inside: avoid !important;
+	}
+
+	/* Repeats table header on following pages */
+	body.print thead {
+		display: table-header-group !important;
+	}
+
+	body.print hr {
+		border-color: #202020;
+		border-width: 1px;
+	}
+}

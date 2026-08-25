@@ -1,62 +1,5 @@
 import { FuzzySuggestModal, App, Modal, TFile } from "obsidian";
-
-// Picker shown when the CSV delimiter can't be auto-detected confidently.
-// Uses Obsidian's built-in FuzzySuggestModal (type-to-filter, keyboard nav).
-type CsvDelimiterOption = { delim: string; label: string; cols: number; rows: number };
-
-export class CsvDelimiterSuggestModal extends FuzzySuggestModal<CsvDelimiterOption> {
-	constructor(
-		app: App,
-		private options: CsvDelimiterOption[],
-		private onPick: (delim: string) => void,
-	) {
-		super(app);
-		this.setPlaceholder("Pick a CSV delimiter…");
-	}
-
-	getItems(): CsvDelimiterOption[] {
-		return this.options;
-	}
-
-	getItemText(item: CsvDelimiterOption): string {
-		return `${item.label}  →  ${item.cols} column${item.cols === 1 ? "" : "s"}, ${item.rows} row${item.rows === 1 ? "" : "s"}`;
-	}
-
-	onChooseItem(item: CsvDelimiterOption): void {
-		this.onPick(item.delim);
-	}
-}
-
-// Picker shown when a table-cell selection spans multiple rows AND columns,
-// so the user confirms the fill direction (or aborts). "Abort" is first so it
-// is the default — pressing Enter changes nothing, avoiding accidental damage.
-type FillOption = { label: string; value: "abort" | "down" | "right" };
-
-export class FillDirectionSuggestModal extends FuzzySuggestModal<FillOption> {
-	constructor(
-		app: App,
-		private onPick: (value: FillOption["value"]) => void,
-	) {
-		super(app);
-		this.setPlaceholder("Selection spans several rows and columns — pick an action…");
-	}
-
-	getItems(): FillOption[] {
-		return [
-			{ label: "Abort (no change)", value: "abort" },
-			{ label: "Fill down — each column from its top cell", value: "down" },
-			{ label: "Fill right — each row from its left cell", value: "right" },
-		];
-	}
-
-	getItemText(item: FillOption): string {
-		return item.label;
-	}
-
-	onChooseItem(item: FillOption): void {
-		this.onPick(item.value);
-	}
-}
+import EditorShortcutsPlugin from "./main";
 
 const formatSize = (bytes: number): string => {
 	if (bytes < 1024) return `${bytes} B`;
@@ -96,4 +39,64 @@ export class FilePropertiesModal extends Modal {
 	onClose() {
 		this.contentEl.empty();
 	}
+}
+
+export async function registerUiCommands(plugin: EditorShortcutsPlugin) {
+	plugin.registerEvent(
+		plugin.app.workspace.on("file-menu", (menu, file, source) => {
+			if (!(file instanceof TFile)) return; // folders have no file stats
+			//if (!["more-options", "file-explorer-context"].contains(source)) return;
+			menu.addItem((item) => {
+				item.setTitle("Show note file properties")
+					.setIcon("info")
+					.onClick(() => new FilePropertiesModal(plugin.app, file).open());
+			});
+		}),
+	);
+
+	// Command to toggle both sidebars
+	plugin.addCommand({
+		id: "toggle-both-sidebars",
+		name: "Toggle both sidebars",
+		icon: "columns-3",
+		hotkeys: [
+			{
+				modifiers: ["Ctrl"],
+				key: "B",
+			},
+		],
+		callback: () => {
+			const { leftSplit, rightSplit } = plugin.app.workspace;
+
+			// If either one is open, close them both.
+			// Otherwise (if both are closed), open them both.
+			const shouldCloseAll = !leftSplit.collapsed || !rightSplit.collapsed;
+
+			if (shouldCloseAll) {
+				leftSplit.collapse();
+				rightSplit.collapse();
+			} else {
+				leftSplit.expand();
+				rightSplit.expand();
+			}
+		},
+	});
+
+	// Trigger Obsidian's editor autocomplete (tags, file links, …) — like
+	// Ctrl+Space in VS Code. Reaches into a private API; fails silently.
+	plugin.addCommand({
+		id: "trigger-suggestion",
+		name: "Trigger autocomplete suggestion",
+		icon: "text-cursor-input",
+		hotkeys: [{ modifiers: ["Ctrl"], key: " " }],
+		editorCallback: (editor, view) => {
+			const suggest = (plugin.app.workspace as any).editorSuggest;
+			if (!suggest || typeof suggest.trigger !== "function") return;
+			try {
+				suggest.trigger(editor, view.file, true);
+			} catch {
+				/* fail silently */
+			}
+		},
+	});
 }

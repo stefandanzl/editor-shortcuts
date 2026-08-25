@@ -1,6 +1,63 @@
-import { Editor, MarkdownView, Notice } from "obsidian";
+import { App, Editor, FuzzySuggestModal, MarkdownView, Notice } from "obsidian";
 import EditorShortcutsPlugin from "./main";
-import { CsvDelimiterSuggestModal, FillDirectionSuggestModal } from "./ui";
+
+// Picker shown when a table-cell selection spans multiple rows AND columns,
+// so the user confirms the fill direction (or aborts). "Abort" is first so it
+// is the default — pressing Enter changes nothing, avoiding accidental damage.
+type FillOption = { label: string; value: "abort" | "down" | "right" };
+
+export class FillDirectionSuggestModal extends FuzzySuggestModal<FillOption> {
+	constructor(
+		app: App,
+		private onPick: (value: FillOption["value"]) => void,
+	) {
+		super(app);
+		this.setPlaceholder("Selection spans several rows and columns — pick an action…");
+	}
+
+	getItems(): FillOption[] {
+		return [
+			{ label: "Abort (no change)", value: "abort" },
+			{ label: "Fill down — each column from its top cell", value: "down" },
+			{ label: "Fill right — each row from its left cell", value: "right" },
+		];
+	}
+
+	getItemText(item: FillOption): string {
+		return item.label;
+	}
+
+	onChooseItem(item: FillOption): void {
+		this.onPick(item.value);
+	}
+}
+
+// Picker shown when the CSV delimiter can't be auto-detected confidently.
+// Uses Obsidian's built-in FuzzySuggestModal (type-to-filter, keyboard nav).
+type CsvDelimiterOption = { delim: string; label: string; cols: number; rows: number };
+
+export class CsvDelimiterSuggestModal extends FuzzySuggestModal<CsvDelimiterOption> {
+	constructor(
+		app: App,
+		private options: CsvDelimiterOption[],
+		private onPick: (delim: string) => void,
+	) {
+		super(app);
+		this.setPlaceholder("Pick a CSV delimiter…");
+	}
+
+	getItems(): CsvDelimiterOption[] {
+		return this.options;
+	}
+
+	getItemText(item: CsvDelimiterOption): string {
+		return `${item.label}  →  ${item.cols} column${item.cols === 1 ? "" : "s"}, ${item.rows} row${item.rows === 1 ? "" : "s"}`;
+	}
+
+	onChooseItem(item: CsvDelimiterOption): void {
+		this.onPick(item.delim);
+	}
+}
 
 export async function registerTableCommands(plugin: EditorShortcutsPlugin) {
 	// Command to fill selected vertical table cells (Excel-style behavior)

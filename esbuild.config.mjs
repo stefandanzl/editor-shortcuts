@@ -36,16 +36,26 @@ const context = await esbuild.context({
 	format: "cjs",
 	target: "es2018",
 	logLevel: "info",
-	sourcemap: prod ? false : "inline",
+	sourcemap: process.env.SOURCEMAP !== "1" ? false : "inline",
 	treeShaking: true,
 	outfile: "main.js",
-	minify: prod,
+	minify: process.env.NO_MINIFY !== "1",
 	metafile: true,
+	drop: process.env.DROP_LOGS === "1" ? ["console", "debugger"] : [], // Removes logs and debuggers from build
 });
 
 if (prod) {
 	const result = await context.rebuild();
-	fs.writeFileSync("meta.json", JSON.stringify(result.metafile));
+
+	// Save metafile as file
+	if (result.metafile) {
+		fs.writeFileSync("meta.json", JSON.stringify(result.metafile, null, 2));
+		if (process.env.ANALYZE_META === "1") {
+			// Optional: Bundle size breakdown in terminal
+			console.log(await esbuild.analyzeMetafile(result.metafile));
+		}
+	}
+	await context.dispose();
 	process.exit(0);
 } else {
 	await context.watch();
