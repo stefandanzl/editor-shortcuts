@@ -99,4 +99,14 @@ export async function registerUiCommands(plugin: EditorShortcutsPlugin) {
 			}
 		},
 	});
+
+	// Dummy command, to take away key activity to disable unwanted key response
+	plugin.addCommand({
+		id: "dummy-command",
+		name: "Dummy command (No-op)",
+		icon: "ban",
+		callback: () => {
+			console.log("Dummy command executed");
+		},
+	});
 }

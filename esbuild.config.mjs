@@ -31,6 +31,7 @@ const context = await esbuild.context({
 		"@lezer/common",
 		"@lezer/highlight",
 		"@lezer/lr",
+		"@electron/remote",
 		...builtins,
 	],
 	format: "cjs",
