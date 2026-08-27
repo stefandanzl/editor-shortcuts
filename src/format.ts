@@ -1,4 +1,4 @@
-import { Editor, htmlToMarkdown } from "obsidian";
+import { Editor, htmlToMarkdown, Notice } from "obsidian";
 import EditorShortcutsPlugin from "./main";
 import { getSelectedLineRange } from "./utils";
 
@@ -18,7 +18,16 @@ async function clipboardHtmlMarkdown() {
 			const item = items[0];
 			if (item.types.includes("text/html")) {
 				const blob = await item.getType("text/html");
-				if (blob) htmlContent = await blob.text();
+				if (blob) {
+					htmlContent = await blob.text();
+					// Check if this html contains encoded html again
+					if (htmlContent.contains("&lt;") && htmlContent.contains("&gt;")) {
+						const parser = new DOMParser();
+						const doc = parser.parseFromString(htmlContent, "text/html");
+						htmlContent = doc.body.textContent;
+						new Notice("Encoded HTML detected in HTML and parsed");
+					}
+				}
 			}
 		}
 	} catch {
@@ -66,7 +75,6 @@ export async function registerFormatCommands(plugin: EditorShortcutsPlugin) {
 			if (!hasMultiLineSelection) return;
 
 			let textSelection = editor.getSelection();
-			console.log(textSelection);
 			const processedText = removeExtraLines(textSelection);
 			editor.replaceSelection(processedText, "remove-newlines-select");
 		},
