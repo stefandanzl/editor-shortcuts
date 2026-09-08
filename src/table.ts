@@ -1,4 +1,5 @@
 import { App, Editor, FuzzySuggestModal, MarkdownView, Notice } from "obsidian";
+import { EditorView } from "@codemirror/view";
 import EditorShortcutsPlugin from "./main";
 
 // Picker shown when a table-cell selection spans multiple rows AND columns,
@@ -59,6 +60,93 @@ export class CsvDelimiterSuggestModal extends FuzzySuggestModal<CsvDelimiterOpti
 	}
 }
 
+// Matches a pipe that is NOT immediately preceded by a backslash
+const PIPE_REGEX = /(?<!\\)\|/;
+
+const getCell = (text: string, col: number): string => {
+    const parts = text.split(PIPE_REGEX);
+    const i = text.trim().startsWith("|") ? col + 1 : col;
+    // Unescape any escaped pipes within the cell content
+    return (parts[i] ?? "").replace(/\\\|/g, "|").trim();
+};
+
+const setCell = (text: string, col: number, value: string): string => {
+    const parts = text.split(PIPE_REGEX);
+    const i = text.trim().startsWith("|") ? col + 1 : col;
+    parts[i] = ` ${value} `;
+    return parts.join("|");
+};
+
+// Cycle states for the cell-cycle command. A cell's trimmed content is matched
+// EXACTLY against this list, then advances to the next entry (wrapping around).
+// Content matching no entry jumps to the FIRST entry. The empty string is a
+// valid state — with two entries this behaves like a toggle pair.
+// const CELL_CYCLE_STATES = ["==x==", ""];
+const CELL_CYCLE_STATES = ["✅", "➖", "❌", ""];
+// const CELL_CYCLE_STATES = ["✅", "🔳", ""];
+// const CELL_CYCLE_STATES = ["✔️", "❌", ""];
+// const CELL_CYCLE_STATES = ["🟩", "🟥", ""];
+
+// Shared plumbing for the table-cell commands (fill-down, cycle): the selected
+// cells of the rendered table widget, mapped to their raw source lines.
+function getSelectedTableCells(editor: Editor, ctx: any) {
+	if (!(ctx instanceof MarkdownView)) {
+		new Notice("No active tab!");
+		return null;
+	}
+	const containerEl = ctx.containerEl;
+
+	const selectedCells = Array.from(
+		containerEl.querySelectorAll<HTMLElement>(".cm-embed-block .is-selected"),
+	);
+	if (selectedCells.length === 0) return null;
+
+	// columnIndex / rowIndex are GLOBAL within the rendered <table>
+	// (header <tr> = row 0, body rows after) — so they map 1:1 to the raw
+	// source lines and a header cell can be selected too.
+	const cellData = selectedCells.map((cell) => {
+		const parentRow = cell.closest("tr") as HTMLElement;
+		const table = parentRow.closest("table");
+		const allRows = table
+			? Array.from(table.querySelectorAll("tr"))
+			: Array.from(parentRow.parentElement!.children);
+		return {
+			columnIndex: Array.from(parentRow.children).indexOf(cell),
+			rowIndex: allRows.indexOf(parentRow),
+		};
+	});
+
+	const cmView = (editor as any).cm;
+	if (!cmView) return null;
+
+	const state = cmView.state;
+	const initialSelection = state.selection; // keep the table block selection active
+	const head = state.selection.main.head;
+	const currentLine = state.doc.lineAt(head);
+
+	let startLineNo = currentLine.number;
+	while (startLineNo > 1 && state.doc.line(startLineNo - 1).text.includes("|")) {
+		startLineNo--;
+	}
+	let endLineNo = currentLine.number;
+	while (endLineNo < state.doc.lines && state.doc.line(endLineNo + 1).text.includes("|")) {
+		endLineNo++;
+	}
+
+	// Map table-row-index -> raw source line (--- separator skipped). Values are
+	// read/written on the raw line, so cells are handled VERBATIM.
+	const lineByTableRow = new Map<number, { from: number; to: number; text: string }>();
+	let tri = 0;
+	for (let lineNo = startLineNo; lineNo <= endLineNo; lineNo++) {
+		const line = state.doc.line(lineNo);
+		if (line.text.includes("---")) continue;
+		lineByTableRow.set(tri, { from: line.from, to: line.to, text: line.text });
+		tri++;
+	}
+
+	return { cellData, cmView, lineByTableRow, initialSelection };
+}
+
 export async function registerTableCommands(plugin: EditorShortcutsPlugin) {
 	// Command to fill selected vertical table cells (Excel-style behavior)
 	plugin.addCommand({
@@ -66,83 +154,18 @@ export async function registerTableCommands(plugin: EditorShortcutsPlugin) {
 		name: "Table Fill Down",
 		icon: "table",
 		editorCallback: (editor: Editor, ctx) => {
-			if (!(ctx instanceof MarkdownView)) {
-				new Notice("No active tab!");
-				return;
-			}
-			const containerEl = ctx.containerEl;
+			const sel = getSelectedTableCells(editor, ctx);
+			if (!sel) return;
+			const { cellData, cmView, lineByTableRow, initialSelection } = sel;
 
-			const selectedCells = Array.from(
-				containerEl.querySelectorAll<HTMLElement>(".cm-embed-block .is-selected"),
-			);
-
-			if (selectedCells.length < 2) {
+			if (cellData.length < 2) {
 				new Notice("Select at least two cells in one column (fill down) or one row (fill right).");
 				return;
 			}
 
-			// columnIndex / rowIndex are GLOBAL within the rendered <table>
-			// (header <tr> = row 0, body rows after) — so they map 1:1 to the raw
-			// source lines and a header cell can be used as a fill source too.
-			// (Header <th> cells do carry .is-selected, so they're captured; the
-			// old per-section rowIndex made a <th> collide with the first body <td>.)
-			const cellData = selectedCells.map((cell) => {
-				const parentRow = cell.closest("tr") as HTMLElement;
-				const table = parentRow.closest("table");
-				const allRows = table
-					? Array.from(table.querySelectorAll("tr"))
-					: Array.from(parentRow.parentElement!.children);
-				return {
-					columnIndex: Array.from(parentRow.children).indexOf(cell),
-					rowIndex: allRows.indexOf(parentRow),
-				};
-			});
-
 			const distinctColumns = new Set(cellData.map((c) => c.columnIndex)).size;
 			const distinctRows = new Set(cellData.map((c) => c.rowIndex)).size;
 			const is2d = distinctColumns > 1 && distinctRows > 1;
-
-			const cmView = (editor as any).cm;
-			if (!cmView) return;
-
-			const state = cmView.state;
-			const initialSelection = state.selection; // keep the table block selection active
-			const head = state.selection.main.head;
-			const currentLine = state.doc.lineAt(head);
-
-			let startLineNo = currentLine.number;
-			while (startLineNo > 1 && state.doc.line(startLineNo - 1).text.includes("|")) {
-				startLineNo--;
-			}
-			let endLineNo = currentLine.number;
-			while (endLineNo < state.doc.lines && state.doc.line(endLineNo + 1).text.includes("|")) {
-				endLineNo++;
-			}
-
-			// Map table-row-index -> raw source line. Values are read from the raw
-			// line (not the rendered DOM) so cells are copied VERBATIM — e.g. a
-			// `<br>` stays the text `<br>` instead of becoming a real newline that
-			// would split and break the table.
-			const lineByTableRow = new Map<number, { from: number; to: number; text: string }>();
-			let tri = 0;
-			for (let lineNo = startLineNo; lineNo <= endLineNo; lineNo++) {
-				const line = state.doc.line(lineNo);
-				if (line.text.includes("---")) continue;
-				lineByTableRow.set(tri, { from: line.from, to: line.to, text: line.text });
-				tri++;
-			}
-
-			const getCell = (text: string, col: number): string => {
-				const parts = text.split("|");
-				const i = text.trim().startsWith("|") ? col + 1 : col;
-				return (parts[i] ?? "").trim();
-			};
-			const setCell = (text: string, col: number, value: string): string => {
-				const parts = text.split("|");
-				const i = text.trim().startsWith("|") ? col + 1 : col;
-				parts[i] = ` ${value} `;
-				return parts.join("|");
-			};
 
 			// Fill down: per column, the top cell fills into the cells below it.
 			// Fill right: per row, the left cell fills into the cells to its right.
@@ -197,6 +220,40 @@ export async function registerTableCommands(plugin: EditorShortcutsPlugin) {
 				// defer past the modal's close/teardown before mutating the editor
 				setTimeout(() => applyFill(choice), 0);
 			}).open();
+		},
+	});
+
+	// Cycle the content of the cell the CURSOR is in, through CELL_CYCLE_STATES
+	// (like cycle-bullet, but for a table cell). The cell's own nested editor is
+	// edited directly — never the main source while a cell is open (desync).
+	plugin.addCommand({
+		id: "table-cell-cycle",
+		name: "Cycle table cell content",
+		icon: "repeat",
+		editorCallback: (editor: Editor, ctx) => {
+			if (!(ctx instanceof MarkdownView)) {
+				new Notice("No active tab!");
+				return;
+			}
+			const cellEditorEl = (document.activeElement as HTMLElement | null)?.closest(
+				".cm-table-widget .cm-editor",
+			) as HTMLElement | null;
+			if (!cellEditorEl) {
+				new Notice("Cursor is not inside a table cell");
+				return;
+			}
+			const view = EditorView.findFromDOM(cellEditorEl);
+			if (!view) return;
+
+			const current = view.state.doc.toString().trim();
+			const idx = CELL_CYCLE_STATES.indexOf(current);
+			const next =
+				idx === -1 ? CELL_CYCLE_STATES[0] : CELL_CYCLE_STATES[(idx + 1) % CELL_CYCLE_STATES.length];
+			if (next !== current) {
+				view.dispatch({
+					changes: { from: 0, to: view.state.doc.length, insert: next },
+				});
+			}
 		},
 	});
 
