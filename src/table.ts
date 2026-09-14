@@ -73,7 +73,8 @@ const getCell = (text: string, col: number): string => {
 const setCell = (text: string, col: number, value: string): string => {
     const parts = text.split(PIPE_REGEX);
     const i = text.trim().startsWith("|") ? col + 1 : col;
-    parts[i] = ` ${value} `;
+    // re-escape pipes (getCell unescapes them) — works for wikilink aliases too
+    parts[i] = ` ${value.replace(/\|/g, "\\|")} `;
     return parts.join("|");
 };
 

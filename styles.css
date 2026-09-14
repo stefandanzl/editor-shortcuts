@@ -82,6 +82,11 @@
 		width: 100% !important;
 	}
 
+	.print th[align="center"],
+	.print td[align="center"] {
+		width: 1%;
+	}
+
 	.print tr {
 		page-break-inside: avoid !important;
 		break-inside: avoid !important;
