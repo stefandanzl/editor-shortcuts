@@ -26,10 +26,12 @@
 		/* font-family: "Latin Modern", "Liberation Serif", serif !important; */
 	}
 
-	.print {
+	.print,
+	.print .markdown-preview-view {
+		/* --font-text-size: 11pt !important; */
+		font-size: var(--font-text-size, 16px) !important;
 		background-color: #ffffff !important;
 		color: #111111 !important;
-		font-size: 11pt !important;
 		line-height: 1.5 !important;
 	}
 

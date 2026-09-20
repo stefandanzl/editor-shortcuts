@@ -15,7 +15,18 @@ import { shell } from "@electron/remote";
 // import { IpcRenderer } from "electron/renderer";
 
 import type EditorShortcutsPlugin from "./main";
+import type { AccentColor, PrintSettings } from "./settings";
 import { writeFileSync } from "node:fs";
+
+const pdfOptionsFrom = (s: PrintSettings): Electron.PrintToPDFOptions => ({
+	...PDF_DEFAULTS,
+	pageSize: s.pageSize,
+	landscape: s.landscape,
+	scale: s.scale,
+	printBackground: s.printBackground,
+	generateDocumentOutline: s.generateDocumentOutline,
+	generateTaggedPDF: s.generateTaggedPDF,
+});
 
 const PDF_DEFAULTS: Electron.PrintToPDFOptions = {
 	pageSize: "A4",
@@ -48,21 +59,13 @@ function copyStylesOnce(targetWin: Window, extraHeadNodes: Node[]) {
 	}
 	for (const node of nodes) targetWin.document.head.appendChild(node);
 
-	const sourceBody = document.body;
 	const targetBody = targetWin.document.body;
-	targetBody.className = sourceBody.className;
+	targetBody.className = document.body.className;
 
-	for (let i = 0; i < sourceBody.style.length; i++) {
-		const prop = sourceBody.style[i];
-		if (prop.startsWith("--")) {
-			targetBody.style.setProperty(prop, sourceBody.style.getPropertyValue(prop));
-		}
-	}
-
-	targetWin.document.documentElement.style.setProperty(
-		"font-size",
-		getComputedStyle(document.body).fontSize,
-	);
+	// targetWin.document.documentElement.style.setProperty(
+	// 	"font-size",
+	// 	getComputedStyle(document.body).fontSize,
+	// );
 
 	targetBody.classList.add("is-popout-window");
 }
@@ -72,6 +75,8 @@ export async function printMarkdown(
 	view: MarkdownView,
 	mode: "print" | "pdf" = "print",
 	pdfOptions: Electron.PrintToPDFOptions = PDF_DEFAULTS,
+	fontSize?: string,
+	accentColor: AccentColor = "obsidian",
 ): Promise<void> {
 	const file = view.file;
 	if (!file) return;
@@ -95,7 +100,8 @@ export async function printMarkdown(
 	}
 
 	const base = win.document.createElement("base");
-	base.href = location.href;
+	// base.href = location.href;
+	base.href = "";
 	win.document.head.appendChild(base);
 	win.document.title = file.basename;
 
@@ -121,6 +127,35 @@ export async function printMarkdown(
 	printRoot.className = "print";
 	win.document.body.appendChild(printRoot);
 
+	// settings font size wins over styles.css (inline !important beats a
+	// stylesheet !important custom property)
+	if (fontSize) {
+		printRoot.style.setProperty("--font-text-size", fontSize, "important");
+	}
+	if (accentColor === "custom") {
+		const accentH = document.body.style.getPropertyValue("--accent-h");
+		win.document.body.style.setProperty("--accent-h", accentH, "important");
+
+		const accentS = document.body.style.getPropertyValue("--accent-s");
+		win.document.body.style.setProperty("--accent-s", accentS, "important");
+
+		const accentL = document.body.style.getPropertyValue("--accent-l");
+		win.document.body.style.setProperty("--accent-l", accentL, "important");
+
+		console.log(accentH, accentL, accentS);
+
+		/**
+		--accent-h: 116;
+		--accent-s: 33%;
+		--accent-l: 41%;
+		*/
+	} else if (accentColor === "mono") {
+		win.document.body.style.setProperty("--accent-h", "170", "important");
+
+		win.document.body.style.setProperty("--accent-s", "0%", "important");
+
+		win.document.body.style.setProperty("--accent-l", "40%", "important");
+	}
 	const renderEl = win.document.createElement("div");
 	renderEl.className = "markdown-preview-view markdown-rendered";
 	printRoot.appendChild(renderEl);
@@ -145,6 +180,17 @@ export async function printMarkdown(
 	const renderer = new Component();
 	renderer.load();
 	await MarkdownRenderer.render(app, markdown, renderEl, file.path, renderer);
+	const anchors = renderEl.getElementsByTagName("a");
+	for (const anchor of anchors) {
+		const link = anchor?.getAttr("href");
+		if (link?.contains("#")) {
+			const linkArray = link.split("#");
+			// const newLink = "#" + linkArray[linkArray.length - 1];
+			const newLink = "+++";
+			anchor?.setAttr("href", newLink);
+		}
+	}
+	console.log("[print] document", win.document.documentElement);
 
 	if (mode === "pdf") {
 		// ipc route: the popup is a real BrowserWindow, so @electron/remote from
@@ -204,7 +250,8 @@ export async function registerPrintCommands(plugin: EditorShortcutsPlugin) {
 			const view = plugin.app.workspace.getActiveViewOfType(MarkdownView);
 			if (view) {
 				if (!checking) {
-					printMarkdown(plugin.app, view, "print");
+					const s = plugin.settings;
+					printMarkdown(plugin.app, view, "print", pdfOptionsFrom(s), s.fontSize, s.accentColor);
 				}
 				return true;
 			}
@@ -220,7 +267,8 @@ export async function registerPrintCommands(plugin: EditorShortcutsPlugin) {
 			const view = plugin.app.workspace.getActiveViewOfType(MarkdownView);
 			if (view) {
 				if (!checking) {
-					printMarkdown(plugin.app, view, "pdf");
+					const s = plugin.settings;
+					printMarkdown(plugin.app, view, "pdf", pdfOptionsFrom(s), s.fontSize, s.accentColor);
 				}
 				return true;
 			}
@@ -240,7 +288,15 @@ export async function registerPrintCommands(plugin: EditorShortcutsPlugin) {
 							.onClick(() => {
 								if (leaf && leaf.view instanceof MarkdownView) {
 									const markdownView = leaf.view;
-									printMarkdown(plugin.app, markdownView);
+									const s = plugin.settings;
+									printMarkdown(
+										plugin.app,
+										markdownView,
+										"print",
+										pdfOptionsFrom(s),
+										s.fontSize,
+										s.accentColor,
+									);
 								}
 							});
 					});
