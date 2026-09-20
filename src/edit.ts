@@ -1,4 +1,4 @@
-import { Editor, Notice } from "obsidian";
+import { Editor, EditorPosition, Notice } from "obsidian";
 import EditorShortcutsPlugin from "./main";
 import { getSelectedLineRange } from "./utils";
 import { EditorView } from "@codemirror/view";
@@ -54,6 +54,32 @@ function moveLine(editor: Editor, dir: "up" | "down") {
 	);
 	editor.setCursor({ line: swapWith, ch: cursor.ch });
 }
+
+// Paragraph = contiguous non-blank lines around the given line range.
+const getParagraphRange = (editor: Editor, startLine: number, endLine: number) => {
+	if (editor.getLine(startLine).trim() === "" && editor.getLine(endLine).trim() === "") {
+		return {
+			from: { line: startLine, ch: 0 },
+			to: { line: endLine, ch: editor.getLine(endLine).length },
+		};
+	}
+	let s = startLine;
+	while (s > 0 && editor.getLine(s - 1).trim() !== "") s--;
+	let e = endLine;
+	const last = editor.lineCount() - 1;
+	while (e < last && editor.getLine(e + 1).trim() !== "") e++;
+	return { from: { line: s, ch: 0 }, to: { line: e, ch: editor.getLine(e).length } };
+};
+
+const eqPos = (a: EditorPosition, b: EditorPosition) => a.line === b.line && a.ch === b.ch;
+
+type Range = { from: EditorPosition; to: EditorPosition };
+
+// Cycle state for expand-selection: the selection the cycle started from and
+// the range the last invocation set. The cycle only continues while the
+// current selection still equals `last` — any manual cursor change breaks the
+// equality and the next press starts a fresh cycle.
+let expandState: { original: Range; last: Range; level: number } | null = null;
 
 export async function registerBasicCommands(plugin: EditorShortcutsPlugin) {
 	// Command to move the current line up
@@ -208,6 +234,16 @@ export async function registerBasicCommands(plugin: EditorShortcutsPlugin) {
 		},
 	});
 
+	plugin.addCommand({
+		id: "select-word",
+		name: "Select word at cursor",
+		icon: "whole-word",
+		editorCallback: (editor: Editor) => {
+			const word = editor.wordAt(editor.getCursor("from"));
+			if (word) editor.setSelection(word.from, word.to);
+		},
+	});
+
 	// Command to select the entire current line (or all lines spanned by the
 	// current selection) — for cutting/deleting/copying a whole line at once.
 	plugin.addCommand({
@@ -220,6 +256,70 @@ export async function registerBasicCommands(plugin: EditorShortcutsPlugin) {
 				{ line: startLine, ch: 0 },
 				{ line: endLine, ch: editor.getLine(endLine).length },
 			);
+		},
+	});
+
+	plugin.addCommand({
+		id: "select-paragraph",
+		name: "Select paragraph",
+		icon: "pilcrow",
+		editorCallback: (editor: Editor) => {
+			const { startLine, endLine } = getSelectedLineRange(editor);
+			const p = getParagraphRange(editor, startLine, endLine);
+			editor.setSelection(p.from, p.to);
+		},
+	});
+
+	// Cascading expand: word -> line -> paragraph -> all -> back to the
+	// original selection, as a continuous cycle. Anchors stay fixed at the
+	// selection the cycle started from; any manual cursor change restarts it.
+	plugin.addCommand({
+		id: "expand-selection",
+		name: "Expand selection (word → line → paragraph → all)",
+		icon: "text-select",
+		editorCallback: (editor: Editor) => {
+			const cur: Range = { from: editor.getCursor("from"), to: editor.getCursor("to") };
+			console.log("[expand] cur", cur, "saved last", expandState?.last, "saved original", expandState?.original);
+
+			let state = expandState;
+			if (
+				state === null ||
+				!eqPos(state.last.from, cur.from) ||
+				!eqPos(state.last.to, cur.to)
+			) {
+				state = { original: cur, last: cur, level: -1 };
+			}
+			const o = state.original;
+
+			// level ladder, anchored at the cycle's original selection
+			const levels: Range[] = [];
+			const word = editor.wordAt(o.from);
+			if (word) levels.push({ from: word.from, to: word.to });
+			levels.push({
+				from: { line: o.from.line, ch: 0 },
+				to: { line: o.to.line, ch: editor.getLine(o.to.line).length },
+			});
+			levels.push(getParagraphRange(editor, o.from.line, o.to.line));
+			const lastLine = editor.lineCount() - 1;
+			levels.push({
+				from: { line: 0, ch: 0 },
+				to: { line: lastLine, ch: editor.getLine(lastLine).length },
+			});
+
+			// advance one level; past the last level -> back to the original
+			const nextIdx = state.level + 1;
+			const wrapped = nextIdx >= levels.length;
+			const target = wrapped ? o : levels[nextIdx];
+			editor.setSelection(target.from, target.to);
+			// store the READ-BACK selection: Live Preview clamps selections
+			// around atomic ranges (e.g. the properties block), so what the
+			// editor actually stores can differ from what we requested
+			expandState = {
+				original: o,
+				last: { from: editor.getCursor("from"), to: editor.getCursor("to") },
+				level: wrapped ? -1 : nextIdx,
+			};
+			console.log("[expand] level", nextIdx, "wrapped", wrapped, "stored", expandState.last);
 		},
 	});
 
