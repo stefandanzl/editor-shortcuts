@@ -115,6 +115,7 @@ export async function registerUiCommands(plugin: EditorShortcutsPlugin) {
 	// id is skipped so repeating never repeats itself.
 	const lastCommandId = "rerun-last-command";
 	const fullLastCommandId = `${plugin.manifest.id}:${lastCommandId}`;
+	let lastRerunId: string | null = null;
 
 	plugin.addCommand({
 		id: lastCommandId,
@@ -131,8 +132,11 @@ export async function registerUiCommands(plugin: EditorShortcutsPlugin) {
 				new Notice("No recent command to rerun");
 				return;
 			}
-			if (cp?.recentCommands[0] !== fullLastCommandId) {
-				new Notice(`Rerunning ${last}`);
+
+			if (last !== lastRerunId) {
+				const name = plugin.app.commands.commands[last]?.name ?? last;
+				new Notice(`Rerunning ${name}`);
+				lastRerunId = last;
 			}
 			plugin.app.commands.executeCommandById(last);
 		},

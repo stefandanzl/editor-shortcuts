@@ -2,6 +2,7 @@ import { Editor, EditorPosition, Notice } from "obsidian";
 import EditorShortcutsPlugin from "./main";
 import { getSelectedLineRange } from "./utils";
 import { EditorView } from "@codemirror/view";
+import { syntaxTree } from "@codemirror/language";
 
 // Move the current line (or the whole selected line block) one line up or
 // down. Shared by the move-line-up / move-line-down commands.
@@ -55,7 +56,9 @@ function moveLine(editor: Editor, dir: "up" | "down") {
 	editor.setCursor({ line: swapWith, ch: cursor.ch });
 }
 
-// Paragraph = contiguous non-blank lines around the given line range.
+// Paragraph = contiguous non-blank lines around the given line range, SCOPED
+// to the content of the innermost heading section (from the CM AST): the
+// scan is bounded by the section, so it can never cross a heading line.
 const getParagraphRange = (editor: Editor, startLine: number, endLine: number) => {
 	if (editor.getLine(startLine).trim() === "" && editor.getLine(endLine).trim() === "") {
 		return {
@@ -63,12 +66,69 @@ const getParagraphRange = (editor: Editor, startLine: number, endLine: number) =
 			to: { line: endLine, ch: editor.getLine(endLine).length },
 		};
 	}
+	// section content = after the section's own heading line, to the section end
+	const inner = getSectionRanges(editor, startLine, endLine)[0];
+	const lower = inner ? inner.from.line + 1 : 0;
+	const upper = inner ? inner.to.line : editor.lineCount() - 1;
+
 	let s = startLine;
-	while (s > 0 && editor.getLine(s - 1).trim() !== "") s--;
+	while (s > lower && editor.getLine(s - 1).trim() !== "") s--;
 	let e = endLine;
-	const last = editor.lineCount() - 1;
-	while (e < last && editor.getLine(e + 1).trim() !== "") e++;
+	while (e < upper && editor.getLine(e + 1).trim() !== "") e++;
 	return { from: { line: s, ch: 0 }, to: { line: e, ch: editor.getLine(e).length } };
+};
+
+// Real parsed headings from the CM syntax tree — a "#" line inside a code
+// block is NOT a heading here. Node names carry the level (header-2 etc.).
+// Returns null if the CM view is unreachable (then the regex fallback runs).
+const getHeadings = (editor: Editor): { level: number; line: number }[] | null => {
+	const view = editor.cm;
+	if (!view) return null;
+	const doc = view.state.doc;
+	const headings: { level: number; line: number }[] = [];
+	syntaxTree(view.state).iterate({
+		from: 0,
+		to: doc.length,
+		enter: (node) => {
+			const m = typeof node.name === "string" ? node.name.match(/header-([1-6])/) : null;
+			if (!m) return true;
+			const line = doc.lineAt(node.from).number - 1;
+			// parents enter before children: the first header node per line is
+			// the line-level one, skip its inline children
+			if (headings.length && headings[headings.length - 1].line === line) return false;
+			headings.push({ level: Number(m[1]), line });
+			return false;
+		},
+	});
+	return headings;
+};
+
+// All heading sections containing the given line range, innermost first:
+// nearest heading section -> parent heading section -> ... up the hierarchy.
+const getSectionRanges = (editor: Editor, startLine: number, endLine: number): Range[] => {
+	const headings = getHeadings(editor);
+	const ranges: Range[] = [];
+	if (!headings) {
+		console.error("NO HEADINGS!!! FALLBACK!!!!");
+		return ranges;
+	}
+
+	const last = editor.lineCount() - 1;
+	// closest heading at-or-above first (innermost), then its ancestors
+	for (let i = headings.length - 1; i >= 0; i--) {
+		const h = headings[i];
+		if (h.line > startLine) continue;
+		let e = last;
+		for (let j = i + 1; j < headings.length; j++) {
+			if (headings[j].level <= h.level) {
+				e = headings[j].line - 1;
+				break;
+			}
+		}
+		if (e < endLine) continue; // section doesn't contain us
+		ranges.push({ from: { line: h.line, ch: 0 }, to: { line: e, ch: editor.getLine(e).length } });
+	}
+	return ranges;
 };
 
 const eqPos = (a: EditorPosition, b: EditorPosition) => a.line === b.line && a.ch === b.ch;
@@ -270,6 +330,17 @@ export async function registerBasicCommands(plugin: EditorShortcutsPlugin) {
 		},
 	});
 
+	plugin.addCommand({
+		id: "select-section",
+		name: "Select section",
+		icon: "heading",
+		editorCallback: (editor: Editor) => {
+			const { startLine, endLine } = getSelectedLineRange(editor);
+			const s = getSectionRanges(editor, startLine, endLine)[0];
+			if (s) editor.setSelection(s.from, s.to);
+		},
+	});
+
 	// Cascading expand: word -> line -> paragraph -> all -> back to the
 	// original selection, as a continuous cycle. Anchors stay fixed at the
 	// selection the cycle started from; any manual cursor change restarts it.
@@ -279,14 +350,9 @@ export async function registerBasicCommands(plugin: EditorShortcutsPlugin) {
 		icon: "text-select",
 		editorCallback: (editor: Editor) => {
 			const cur: Range = { from: editor.getCursor("from"), to: editor.getCursor("to") };
-			console.log("[expand] cur", cur, "saved last", expandState?.last, "saved original", expandState?.original);
 
 			let state = expandState;
-			if (
-				state === null ||
-				!eqPos(state.last.from, cur.from) ||
-				!eqPos(state.last.to, cur.to)
-			) {
+			if (state === null || !eqPos(state.last.from, cur.from) || !eqPos(state.last.to, cur.to)) {
 				state = { original: cur, last: cur, level: -1 };
 			}
 			const o = state.original;
@@ -300,6 +366,7 @@ export async function registerBasicCommands(plugin: EditorShortcutsPlugin) {
 				to: { line: o.to.line, ch: editor.getLine(o.to.line).length },
 			});
 			levels.push(getParagraphRange(editor, o.from.line, o.to.line));
+			levels.push(...getSectionRanges(editor, o.from.line, o.to.line));
 			const lastLine = editor.lineCount() - 1;
 			levels.push({
 				from: { line: 0, ch: 0 },
