@@ -133,6 +133,26 @@ const getSectionRanges = (editor: Editor, startLine: number, endLine: number): R
 
 const eqPos = (a: EditorPosition, b: EditorPosition) => a.line === b.line && a.ch === b.ch;
 
+const posBefore = (a: EditorPosition, b: EditorPosition) =>
+	a.line < b.line || (a.line === b.line && a.ch < b.ch);
+
+const containsStrictly = (outer: Range, inner: Range) =>
+	(posBefore(outer.from, inner.from) || eqPos(outer.from, inner.from)) &&
+	(posBefore(inner.to, outer.to) || eqPos(inner.to, outer.to)) &&
+	(posBefore(outer.from, inner.from) || posBefore(inner.to, outer.to));
+
+// setSelection WITHOUT scrolling: a raw CM dispatch carries no scrollIntoView,
+// so the viewport stays exactly where it is.
+const setSelectionNoScroll = (editor: Editor, from: EditorPosition, to: EditorPosition) => {
+	const view = editor.cm;
+	if (!view) {
+		editor.setSelection(from, to);
+		return;
+	}
+	const at = (p: EditorPosition) => view.state.doc.line(p.line + 1).from + p.ch;
+	view.dispatch({ selection: { anchor: at(from), head: at(to) } });
+};
+
 type Range = { from: EditorPosition; to: EditorPosition };
 
 // Cycle state for expand-selection: the selection the cycle started from and
@@ -300,7 +320,7 @@ export async function registerBasicCommands(plugin: EditorShortcutsPlugin) {
 		icon: "whole-word",
 		editorCallback: (editor: Editor) => {
 			const word = editor.wordAt(editor.getCursor("from"));
-			if (word) editor.setSelection(word.from, word.to);
+			if (word) setSelectionNoScroll(editor, word.from, word.to);
 		},
 	});
 
@@ -312,7 +332,8 @@ export async function registerBasicCommands(plugin: EditorShortcutsPlugin) {
 		icon: "text-cursor",
 		editorCallback: (editor: Editor) => {
 			const { startLine, endLine } = getSelectedLineRange(editor);
-			editor.setSelection(
+			setSelectionNoScroll(
+				editor,
 				{ line: startLine, ch: 0 },
 				{ line: endLine, ch: editor.getLine(endLine).length },
 			);
@@ -326,7 +347,7 @@ export async function registerBasicCommands(plugin: EditorShortcutsPlugin) {
 		editorCallback: (editor: Editor) => {
 			const { startLine, endLine } = getSelectedLineRange(editor);
 			const p = getParagraphRange(editor, startLine, endLine);
-			editor.setSelection(p.from, p.to);
+			setSelectionNoScroll(editor, p.from, p.to);
 		},
 	});
 
@@ -337,7 +358,7 @@ export async function registerBasicCommands(plugin: EditorShortcutsPlugin) {
 		editorCallback: (editor: Editor) => {
 			const { startLine, endLine } = getSelectedLineRange(editor);
 			const s = getSectionRanges(editor, startLine, endLine)[0];
-			if (s) editor.setSelection(s.from, s.to);
+			if (s) setSelectionNoScroll(editor, s.from, s.to);
 		},
 	});
 
@@ -373,11 +394,17 @@ export async function registerBasicCommands(plugin: EditorShortcutsPlugin) {
 				to: { line: lastLine, ch: editor.getLine(lastLine).length },
 			});
 
-			// advance one level; past the last level -> back to the original
-			const nextIdx = state.level + 1;
+			// advance to the next level that STRICTLY grows the selection
+			// (skips duplicates and levels the selection already covers; also
+			// handles a fresh cycle or the wrap, where level = -1). Exhausted
+			// -> wrap back to the original selection.
+			let nextIdx = state.level + 1;
+			while (nextIdx < levels.length && !containsStrictly(levels[nextIdx], cur)) {
+				nextIdx++;
+			}
 			const wrapped = nextIdx >= levels.length;
 			const target = wrapped ? o : levels[nextIdx];
-			editor.setSelection(target.from, target.to);
+			setSelectionNoScroll(editor, target.from, target.to);
 			// store the READ-BACK selection: Live Preview clamps selections
 			// around atomic ranges (e.g. the properties block), so what the
 			// editor actually stores can differ from what we requested
