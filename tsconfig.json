@@ -14,7 +14,8 @@
 		"strictPropertyInitialization": false,
 		"allowSyntheticDefaultImports": true,
 		"lib": ["DOM", "ES2022"],
-		"useUnknownInCatchVariables": false
+		"useUnknownInCatchVariables": false,
+		"types": ["node", "@obsidian-typings/obsidian-public-latest"]
 	},
 	"include": ["src/**/*.ts"],
 	"exclude": ["node_modules", "tests/"]

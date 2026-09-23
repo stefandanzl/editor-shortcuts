@@ -109,4 +109,32 @@ export async function registerUiCommands(plugin: EditorShortcutsPlugin) {
 			console.log("Dummy command executed");
 		},
 	});
+
+	// Repeats the most recently executed command (palette OR hotkey — both end
+	// up in the command palette's recentCommands, newest at index 0). Our own
+	// id is skipped so repeating never repeats itself.
+	const lastCommandId = "rerun-last-command";
+	const fullLastCommandId = `${plugin.manifest.id}:${lastCommandId}`;
+
+	plugin.addCommand({
+		id: lastCommandId,
+		name: "Rerun last command",
+		icon: "history",
+		repeatable: true,
+		callback: () => {
+			const cp = plugin.app.internalPlugins?.plugins?.["command-palette"]?.instance;
+			const last = (cp?.recentCommands ?? []).find(
+				// "editor-shortcuts:repeat-last-command"
+				(id: string) => id !== fullLastCommandId,
+			);
+			if (!last) {
+				new Notice("No recent command to rerun");
+				return;
+			}
+			if (cp?.recentCommands[0] !== fullLastCommandId) {
+				new Notice(`Rerunning ${last}`);
+			}
+			plugin.app.commands.executeCommandById(last);
+		},
+	});
 }
